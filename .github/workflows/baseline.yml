@@ -17,3 +17,5 @@ jobs:
           python-version: '3.12'
       - name: Validate repository source of truth
         run: python scripts/validate_repo.py
+      - name: Compile helper scripts
+        run: python -m compileall -q scripts
