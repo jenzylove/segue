@@ -103,7 +103,7 @@ contract StockPolicyVault {
     error ExecutionNotReady(PreviewReason reason);
     error RouterCallFailed(bytes data);
     error UnsafeOutput(uint256 received, uint256 minimumRequired);
-    error InvalidSellDelta(uint256 sold, uint256 maximum);
+    error InvalidSellDelta(uint256 sold, uint256 required);
     error Reentrancy();
     error TokenCallFailed(address token, bytes data);
 
@@ -114,7 +114,13 @@ contract StockPolicyVault {
     event PausedSet(bool paused);
     event PolicyCreated(uint256 indexed policyId, uint8 stepCount, uint256 maxDeployedUSDC);
     event StepActivated(uint256 indexed policyId, uint8 indexed stepIndex, uint256 referencePrice);
-    event ExecutionAttempted(uint256 indexed policyId, uint8 indexed stepIndex, address sellToken, address buyToken, uint256 sellAmount);
+    event ExecutionAttempted(
+        uint256 indexed policyId,
+        uint8 indexed stepIndex,
+        address sellToken,
+        address buyToken,
+        uint256 sellAmount
+    );
     event StepExecuted(
         uint256 indexed policyId,
         uint8 indexed stepIndex,
@@ -122,7 +128,6 @@ contract StockPolicyVault {
         uint256 boughtAmount,
         uint256 minBuyAmount
     );
-    event ExecutionRejected(uint256 indexed policyId, uint8 indexed stepIndex, PreviewReason reason);
     event PolicyCompleted(uint256 indexed policyId);
     event PolicyCancelled(uint256 indexed policyId);
 
@@ -201,7 +206,7 @@ contract StockPolicyVault {
         emit PausedSet(value);
     }
 
-    function depositSettlement(uint256 amount) external onlyOwner nonReentrant {
+    function depositSettlement(uint256 amount) external nonReentrant onlyOwner {
         if (amount == 0) revert InvalidLimit();
         _safeTransferFrom(settlementToken, msg.sender, address(this), amount);
         emit Deposited(settlementToken, amount);
@@ -209,7 +214,7 @@ contract StockPolicyVault {
 
     /// @notice Owner-controlled recovery. A withdrawal may make a future step non-executable,
     ///         but can never make the worker exceed the stored rules.
-    function withdraw(address token, address to, uint256 amount) external onlyOwner nonReentrant {
+    function withdraw(address token, address to, uint256 amount) external nonReentrant onlyOwner {
         if (to == address(0)) revert ZeroAddress();
         _safeTransfer(token, to, amount);
         emit Withdrawn(token, to, amount);
@@ -328,8 +333,8 @@ contract StockPolicyVault {
 
     function executeStep(uint256 policyId, bytes calldata allowanceHolderCalldata)
         external
-        onlyExecutorOrOwner
         nonReentrant
+        onlyExecutorOrOwner
     {
         (bool executable, PreviewReason reason,, uint256 sellAmount, uint256 minBuyAmount) = previewExecution(policyId);
         if (!executable) revert ExecutionNotReady(reason);
@@ -357,16 +362,19 @@ contract StockPolicyVault {
 
         uint256 sold = sellBefore - sellAfter;
         uint256 bought = buyAfter - buyBefore;
-        if (sold == 0 || sold > sellAmount) revert InvalidSellDelta(sold, sellAmount);
+        // A worker may choose the route, but it may not advance a step by selling less
+        // than the exact amount resolved from the user's stored rule.
+        if (sold != sellAmount) revert InvalidSellDelta(sold, sellAmount);
         if (bought < minBuyAmount) revert UnsafeOutput(bought, minBuyAmount);
 
         if (step.sellToken == settlementToken) {
             policy.deployedUSDC += sold;
             vaultDeployedUSDC += sold;
         } else if (step.buyToken == settlementToken) {
-            uint256 reduction = bought > policy.deployedUSDC ? policy.deployedUSDC : bought;
-            policy.deployedUSDC -= reduction;
-            vaultDeployedUSDC -= reduction;
+            uint256 policyReduction = bought > policy.deployedUSDC ? policy.deployedUSDC : bought;
+            uint256 vaultReduction = bought > vaultDeployedUSDC ? vaultDeployedUSDC : bought;
+            policy.deployedUSDC -= policyReduction;
+            vaultDeployedUSDC -= vaultReduction;
         }
 
         step.status = StepStatus.EXECUTED;
@@ -453,8 +461,17 @@ contract StockPolicyVault {
         (uint256 sellPrice,) = registry.priceUsd1e8(sellToken);
         (uint256 buyPrice,) = registry.priceUsd1e8(buyToken);
 
-        uint256 usdValue1e8 = (sellAmount * sellPrice) / (10 ** uint256(sellAsset.tokenDecimals));
-        uint256 expectedBuy = (usdValue1e8 * (10 ** uint256(buyAsset.tokenDecimals))) / buyPrice;
+        // Keep only one division so a 6-decimal settlement token can quote an
+        // 18-decimal B20 asset without losing meaningful precision first.
+        uint256 expectedBuy;
+        if (buyAsset.tokenDecimals >= sellAsset.tokenDecimals) {
+            uint256 scale = 10 ** uint256(buyAsset.tokenDecimals - sellAsset.tokenDecimals);
+            expectedBuy = (sellAmount * sellPrice * scale) / buyPrice;
+        } else {
+            uint256 scale = 10 ** uint256(sellAsset.tokenDecimals - buyAsset.tokenDecimals);
+            expectedBuy = (sellAmount * sellPrice) / (buyPrice * scale);
+        }
+
         return (expectedBuy * (BPS - maxDeviationBps)) / BPS;
     }
 
