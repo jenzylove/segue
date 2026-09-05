@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Segue verified B20 asset registry",
+  "type": "object",
+  "required": ["network", "chainId", "settlementToken", "assets"],
+  "properties": {
+    "network": { "const": "base-mainnet" },
+    "chainId": { "const": 8453 },
+    "settlementToken": {
+      "type": "object",
+      "required": ["symbol", "address", "decimals", "source"],
+      "properties": {
+        "symbol": { "const": "USDC" },
+        "address": { "type": "string", "pattern": "^0x[a-fA-F0-9]{40}$" },
+        "decimals": { "type": "integer", "minimum": 0, "maximum": 36 },
+        "source": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ticker", "name", "tokenAddress", "tokenDecimals", "totalReturnFeed", "feedDecimals", "active", "sources"],
+        "properties": {
+          "ticker": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "tokenAddress": { "type": "string", "pattern": "^0x[a-fA-F0-9]{40}$" },
+          "tokenDecimals": { "type": "integer", "minimum": 0, "maximum": 36 },
+          "totalReturnFeed": { "type": "string", "pattern": "^0x[a-fA-F0-9]{40}$" },
+          "feedDecimals": { "type": "integer", "minimum": 0, "maximum": 36 },
+          "active": { "type": "boolean" },
+          "sources": {
+            "type": "object",
+            "required": ["base", "chainlink"],
+            "properties": {
+              "base": { "type": "string", "minLength": 1 },
+              "chainlink": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
