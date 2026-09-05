@@ -3,14 +3,14 @@
 **Product:** Segue  
 **Hackathon:** Base Builder Quest — Tokenized Stocks  
 **Deadline:** September 9, 2026, 11:59 PM EST  
-**Status:** M1 contract state machine complete and locally verified; M2 real Base mainnet integration pending  
+**Status:** M1 contract state machine complete and locally verified; M2 real Base mainnet integration in progress  
 **Source of truth:** This file is the build contract. Architecture or scope changes require verified blocker evidence and a dated decision entry.
 
 ---
 
 ## 1. Product thesis
 
-**Segue is a 24/7 conditional execution layer for Coinbase Tokenized Stocks on Base.**
+**Segue is a conditional execution layer for Coinbase Tokenized Stocks on Base.**
 
 A user defines a dependent stock sequence once, for example:
 
@@ -119,6 +119,10 @@ Base USDC is the settlement asset.
 
 B20 token/share representation can change through the B20 multiplier for splits/dividends. Segue therefore uses the official Chainlink **total-return feed** for trigger and valuation truth rather than a naive raw token/share assumption.
 
+### Feed-hours limitation
+
+Coinbase B20 tokens can trade around the clock, but the configured Chainlink equity total-return feed may stop updating outside its own operating window. Segue must fail closed when that feed exceeds the configured staleness limit. Product copy should therefore distinguish **always-on monitoring/trading availability** from guaranteed trigger execution during stale-feed periods.
+
 ---
 
 ## 5. Locked architecture
@@ -143,10 +147,10 @@ FastAPI automation worker
   - never owns user strategy funds
   - reconciles onchain policies
   - asks whether active step is executable
-  - obtains validated 0x quote only when needed
+  - obtains validated 1inch Classic Swap calldata only when needed
   - submits execution and records evidence
-  ├─ CDP/Base RPC
-  ├─ 0x Swap API
+  ├─ Base RPC
+  ├─ 1inch Classic Swap API
   └─ PostgreSQL index/cache
 ```
 
@@ -169,7 +173,7 @@ The vault must independently:
 4. check policy/vault deployed-USDC caps;
 5. compute minimum acceptable output from verified prices + user `maxDeviationBps`;
 6. snapshot sell/buy balances;
-7. approve only the exact resolved sell amount to the fixed 0x execution/allowance target;
+7. approve only the exact resolved sell amount to the factory's immutable execution target;
 8. execute worker-supplied routing calldata;
 9. reset allowance to zero where appropriate;
 10. require the exact stored sell amount was consumed;
@@ -177,6 +181,12 @@ The vault must independently:
 12. only then mark the step executed and activate the next step.
 
 Any failed postcondition reverts and leaves the sequence unadvanced.
+
+### Execution-provider boundary
+
+The vault does not trust or depend on a quote API by name. It only knows one immutable execution contract address selected before deployment. The worker validates provider output and the vault independently validates the economic result.
+
+For the current M2 path, the execution target must be resolved from 1inch's live `approve/spender` endpoint and frozen into the factory. A later quote is accepted only if its `tx.to` still equals that same target.
 
 ### Source of truth
 
@@ -193,15 +203,15 @@ Locked runtime direction:
 - FastAPI;
 - SQLAlchemy/PostgreSQL;
 - Web3.py or minimal EVM client;
-- HTTPX for 0x;
+- HTTPX for 1inch;
 - always-on worker process/service.
 
 Target loop every ~20–30 seconds:
 1. discover/reconcile active vaults/steps;
 2. call onchain `previewExecution`/equivalent;
 3. if false, do nothing;
-4. if true, request a firm 0x quote;
-5. validate chain, taker, recipient, token pair, amount, allowance/execution target and freshness;
+4. if true, request a firm 1inch Classic Swap transaction;
+5. validate chain, `from`, `origin`, receiver, token pair, amount, execution target and freshness;
 6. submit `executeStep`;
 7. wait for receipt;
 8. persist tx/evidence;
@@ -244,7 +254,7 @@ Show the sequence path visually, e.g.:
 
 `NVDAc condition → Buy → +8% → Sell 50% → AAPLc condition → Buy`
 
-Use only real chart/market data. If an underlying-equity chart is used, label it as underlying-stock context; actual automation truth remains the B20 Chainlink total-return feed and actual 0x execution quote.
+Use only real chart/market data. If an underlying-equity chart is used, label it as underlying-stock context; actual automation truth remains the B20 Chainlink total-return feed and actual execution quote.
 
 User flow:
 
@@ -262,23 +272,26 @@ Required:
 - Base mainnet;
 - official Coinbase B20 assets;
 - official Chainlink total-return feeds;
-- 0x Swap API / supported execution target;
-- CDP/Base RPC;
+- 1inch Classic Swap API / live supported execution target;
+- Base RPC;
 - ERC-8021/Base Builder Code;
 - PostgreSQL;
 - a real chart source for polished frontend context.
 
 Not required:
+- 0x after the verified provider-side RWA authorization blocker;
 - AI provider;
 - Telegram/Telegraph;
 - Firestore/Vertex;
 - Chainlink Automation.
 
-### Credential state after M1
+### Credential state during M2
 
 - `EXECUTOR_PRIVATE_KEY`: obtained by builder; secret, never commit/paste.
-- `BASE_RPC_URL`: obtained by builder; secret, never commit/paste.
-- `ZEROX_API_KEY`: pending; required for M2 real quote/trade, not M1.
+- `EXECUTOR_ADDRESS`: configured; first real preflight showed zero Base ETH, so a small gas balance is still required before deployment.
+- `BASE_RPC_URL`: configured locally; M2 may use any Base mainnet RPC that passes the required read calls.
+- `ONEINCH_API_KEY`: required next for live route verification; secret, never commit/paste.
+- `EXECUTION_TARGET_ADDRESS`: public; set only from the live 1inch `approve/spender` response before deployment.
 - `BASE_BUILDER_CODE`: Base app setup started; domain verification waits for deployed Segue URL.
 - `DATABASE_URL`: later worker/persistence milestone.
 
@@ -289,7 +302,7 @@ Not required:
 These are completion gates, not reasons to silently redesign.
 
 ### B1 — Real B20 route exists
-0x returns an executable Base mainnet quote for at least one official B20 ↔ USDC pair with the vault as taker/recipient.
+1inch returns a firm executable Base mainnet transaction for at least one official Coinbase B20 ↔ USDC pair with the Segue vault as `from`/receiver, the executor EOA as `origin`, and the transaction target equal to the factory's frozen execution target.
 
 ### B2 — Real B20 buy
 A deployed Segue vault completes a real Base mainnet USDC → B20 purchase through the production path and receives the B20 output.
@@ -298,7 +311,7 @@ A deployed Segue vault completes a real Base mainnet USDC → B20 purchase throu
 The same vault can sell all/part of a B20 balance back to USDC through the same bounded path.
 
 ### B4 — Real Chainlink condition
-The deployed contract reads the exact official total-return feed and rejects a false condition / accepts a true condition.
+The deployed contract reads the exact official total-return feed and rejects a false condition / accepts a true condition while failing safely on stale data.
 
 ### B5 — Browser-closed automation
 A deployed worker advances an ACTIVE policy without the frontend open.
@@ -336,7 +349,7 @@ Every milestone ends with: verify → commit/push → reconcile PRD/integration 
 |---|---|---|---|
 | M0 Repo/source of truth | **COMPLETE** | `ac2cba1c7e309a35244816c36e781471600275fe` | Source-of-truth baseline + secret-safe CI green |
 | M1 Contract state machine | **COMPLETE** | `615b1908856670601e2d9ae05fc1d4ec52cc66f8` | Foundry build green; 24 tests passed, 0 failed; vault/factory/registry implemented + hardened |
-| M2 Real Base mainnet buy/sell | NOT STARTED | — | Must pass B1–B4 |
+| M2 Real Base mainnet buy/sell | **IN PROGRESS** | current `main` | Base/NVDAc/feeds reached; 0x provider blocker proven; 1inch adapter implemented; live 1inch route + deployment/buy/sell remain |
 | M3 Autonomous worker | NOT STARTED | — | Must pass B5–B6 with deployed service |
 | M4 Persistence/history/multi-user | NOT STARTED | — | Must pass B7–B9 |
 | M5 Trading frontend | NOT STARTED | — | Deployed browser flow against real backend/contracts |
@@ -349,26 +362,36 @@ Required: PRD, build rules, AGENTS.md, environment example, architecture/integra
 
 ### M1 — Contract state machine
 
-Required: factory, per-user vault, policy/step state, deterministic conditions, caps, pause/cancel/withdraw, Chainlink checking boundary, ordered activation, bounded 0x execution boundary and contract tests. **Complete locally.**
+Required: factory, per-user vault, policy/step state, deterministic conditions, caps, pause/cancel/withdraw, Chainlink checking boundary, ordered activation, bounded fixed execution-target boundary and contract tests. **Complete locally.**
 
 M1 evidence:
 - Solidity 0.8.24 / Foundry 1.8.1 build succeeded via IR;
 - 24 tests passed, 0 failed, 0 skipped on GitHub Actions;
 - covered ordered activation, reference capture, true/false relative conditions, stale feed rejection, caps, pause/cancel, unauthorized withdrawal, exact one-time execution, unsafe output reversion, executor overspend, partial-sell prevention, multi-user factory isolation and cross-policy vault exposure release;
-- no mainnet/provider success is claimed by M1.
+- no mainnet trade/provider success is claimed by M1.
 
 ### M2 — Real Base mainnet buy + sell
 
 Required outcome:
-- verify exact official Base USDC, chosen B20 token and total-return feed;
-- verify current supported 0x allowance/execution target from official/live evidence;
-- deploy the exact tested contracts;
-- fund one vault with tiny USDC;
-- obtain production 0x quote;
+- verify exact official Base USDC, chosen Coinbase B20 token and total-return feed;
+- verify current live 1inch execution target and executable B20 route;
+- deploy the exact tested contracts with that target frozen into the factory;
+- create/fund one tiny demo vault;
+- obtain production 1inch swap calldata for the vault;
 - execute real B20 buy;
 - execute real B20 sell;
 - record tx hashes and before/after balances;
 - pass B1–B4.
+
+Current verified state:
+- Base chain id 8453 reached;
+- configured USDC/NVDAc contracts and both Chainlink feeds returned real onchain data;
+- 0x USDC→NVDAc returned HTTP 422 `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE`;
+- 1inch adapter/preflight/firm-quote code implemented;
+- contract CI remains green after deployment-script change;
+- live 1inch route is not yet claimed because a Segue `ONEINCH_API_KEY` has not yet been exercised;
+- executor currently needs Base ETH gas;
+- equity-feed freshness may block B4 outside its update window.
 
 **Do not begin the main frontend redesign before M2 passes.**
 
@@ -394,11 +417,11 @@ README truth audit, under-3-minute demo, X post, live URL, Builder Code and form
 
 ---
 
-## 11. M1 architecture decisions / hardening ledger
+## 11. Architecture decisions / hardening ledger
 
 ### 2026-09-05 — Exact executor spend
 
-The executor may choose route calldata but may not cause a fixed step to advance after selling less than the stored resolved amount. Vault execution now requires `sold == sellAmount` in addition to the minimum-output postcondition.
+The executor may choose route calldata but may not cause a fixed step to advance after selling less than the stored resolved amount. Vault execution requires `sold == sellAmount` in addition to the minimum-output postcondition.
 
 ### 2026-09-05 — Cross-policy vault exposure
 
@@ -406,22 +429,32 @@ A later policy selling B20 acquired by a previous completed policy must release 
 
 ### 2026-09-05 — Quote-math precision
 
-Minimum-buy computation scales by token-decimal difference before the principal division to avoid unnecessary precision loss between 6-decimal USDC and 18-decimal assets. Final minimum output remains conservatively rounded down.
+Minimum-buy computation scales by token-decimal difference before the principal division to avoid unnecessary precision loss between 6-decimal USDC and B20 assets. Final minimum output remains conservatively rounded down.
 
-These are hardening corrections inside the locked architecture, not product pivots.
+### 2026-09-05 — M2 routing provider changed from 0x to 1inch
+
+Verified evidence forced this change rather than preference:
+
+1. The real Segue preflight reached Base mainnet, official NVDAc and the configured Chainlink feeds successfully.
+2. The live 0x request for USDC → NVDAc then returned HTTP 422 `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE`, with the provider stating the buy token was not authorized due to legal restrictions.
+3. Base publicly lists 1inch as a Coinbase Tokenized Stocks venue, and 1inch publicly documents support for Coinbase B20 stocks on Base including NVDAc.
+4. Segue therefore replaces only the offchain routing adapter. The Coinbase B20 asset, Base chain, Chainlink truth, per-user vaults, hard limits, fixed execution-target boundary and product thesis stay unchanged.
+5. The 1inch replacement remains **adapter implemented, not real-provider verified** until the dedicated Segue API key produces a live route.
+
+Do not bypass 0x's provider restriction and do not weaken the vault to accommodate a router.
 
 ---
 
 ## 12. Demo path
 
 Target under 3 minutes:
-1. open a real B20 stock with real price/chart context;
+1. open a real Coinbase B20 stock with real price/chart context;
 2. build a tiny real-capital sequence;
 3. show the sequence path and hard limits;
 4. activate/fund once;
 5. explain the worker cannot change rules or withdraw;
 6. leave/close the app;
-7. show real autonomous evidence: condition true → contract recheck → 0x route → Base transaction → next step activated;
+7. show real autonomous evidence: condition true → contract recheck → 1inch route → Base transaction → next step activated;
 8. reopen and show the same state recovered from chain;
 9. open block explorer evidence including Builder Code attribution.
 
@@ -491,9 +524,12 @@ Primary references:
 - Base Request for Builders: https://blog.base.org/request-for-builders-tokenized-stocks
 - Builder Codes/ERC-8021: https://blog.base.dev/builder-codes-and-erc-8021-fixing-onchain-attribution
 - Coinbase CDP Node: https://docs.cdp.coinbase.com/data/node/overview
-- 0x Swap API: https://docs.0x.org/docs/introduction/quickstart/swap-tokens-with-0x-swap-api
-- 0x contracts: https://docs.0x.org/docs/core-concepts/contracts
-- 0x rate limits: https://docs.0x.org/docs/developer-resources/rate-limits
+- 1inch Coinbase Tokenized Stocks support: https://1inch.com/blog/post/coinbase-tokenized-stocks
+- 1inch Classic Swap API: https://business.1inch.com/portal/documentation/apis/swap/classic-swap/introduction
+- 1inch API authentication: https://business.1inch.com/portal/documentation/apis/authentication
+
+Historical provider evidence:
+- 0x Swap API was implemented first but the live Segue USDC→NVDAc request was blocked by 0x RWA authorization on 2026-09-05. See `docs/INTEGRATIONS.md`.
 
 Quest tracking reference:
 - https://viamu.app/opportunities/base-tokenized-stocks-2026
