@@ -25,11 +25,11 @@ FastAPI automation worker
   - gas-only executor wallet
   - discovers/reconciles active vaults
   - asks onchain state whether a step is executable
-  - obtains validated 0x quote
+  - obtains validated 1inch Classic Swap calldata
   - submits transaction
   - persists tx/provider evidence
         ├─ Base RPC
-        ├─ 0x Swap API
+        ├─ 1inch Classic Swap API
         └─ PostgreSQL cache/index
 ```
 
@@ -51,7 +51,7 @@ Once a token/feed pair is registered, M1 provides no function to silently replac
 ### `StockPolicyVaultFactory`
 
 - permissionless one-vault-per-wallet creation;
-- stores shared registry, settlement token and execution/allowance target configuration;
+- stores shared registry, settlement token and fixed execution-target configuration;
 - factory retains no policy or withdrawal authority over user vaults;
 - emits `VaultCreated` for later chain-backed discovery.
 
@@ -83,6 +83,16 @@ Execution uses a deliberately narrow boundary:
 10. only then mark the step executed and activate/capture the next reference.
 
 A revert at any point leaves the sequence unadvanced.
+
+## Execution provider boundary
+
+The vault is deliberately **not coupled to a quote API**. It only knows one immutable execution contract address supplied by the factory. The offchain adapter must validate provider output before passing calldata to the vault.
+
+M2 originally selected 0x. A real 2026-09-05 USDC → NVDAc request reached 0x and returned `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE` due provider-side legal restrictions. Segue does not attempt to bypass that restriction.
+
+M2 now uses 1inch Classic Swap because Base and 1inch publicly document support for Coinbase Tokenized Stocks on Base. The deployment does not guess a router address: `m2_preflight.py` resolves 1inch's live `approve/spender` value, verifies code on Base, and the deployment freezes that public address as the factory's execution target. The firm-quote path rechecks that live spender before accepting calldata.
+
+This changes the routing adapter only; the user-vault trust boundary is unchanged.
 
 ## Trust boundary
 
@@ -119,25 +129,28 @@ PostgreSQL is used for:
 - indexing cursors;
 - friendly UI metadata;
 - worker health;
-- 0x request/response provenance;
+- 1inch request/response provenance;
 - transaction evidence cache.
 
 The app must recover after local/browser state is cleared.
 
 ## Verification status
 
-M1 is **locally contract-verified only**:
+M1 is **locally contract-verified**:
 
 - Foundry build succeeds with Solidity 0.8.24 via IR;
 - 24 tests pass, 0 fail;
 - tests cover ordered activation, reference capture, false/true relative conditions, caps, pause/cancel, unauthorized withdrawal, stale feeds, exact one-time execution, unsafe output reversion, executor overspend prevention, partial-sell prevention and cross-policy vault exposure release.
 
-M1 does **not** claim:
-- an official B20 token/feed has been registered on Base mainnet;
-- a live 0x quote has been accepted;
-- a real B20 buy/sell has occurred.
+M2 evidence so far:
 
-Those are M2 gates.
+- Base mainnet chain id, official NVDAc token interface and configured Chainlink feeds were reached by the real preflight;
+- the old 0x route is provider-blocked for NVDAc on the current Segue API account;
+- the 1inch adapter, live-spender validation and firm-transaction validation are implemented and syntax/contract CI is green;
+- a real 1inch NVDAc API response is **not yet verified** because a Segue 1inch API key is still required;
+- no Segue contracts have been deployed to Base mainnet and no B20 buy/sell is claimed yet.
+
+Those remain M2 gates.
 
 ## Reuse policy
 
