@@ -13,14 +13,14 @@ contract StockPolicyVaultHardeningTest is StockPolicyVaultTest {
         // The stored rule requires exactly 10 USDC. An untrusted executor must not be
         // able to sell only 9 USDC, donate enough NVDA to satisfy the output guard,
         // and thereby advance the state machine.
-        bytes memory partial = abi.encodeCall(
+        bytes memory partialSell = abi.encodeCall(
             MockAllowanceHolder.swap,
             (address(usdc), address(nvda), 9 * ONE_USDC, ONE_STOCK / 10)
         );
 
         vm.expectRevert();
         vm.prank(EXECUTOR);
-        vault.executeStep(policyId, partial);
+        vault.executeStep(policyId, partialSell);
 
         require(usdc.balanceOf(address(vault)) == usdcBefore, "partial sell moved USDC");
         require(nvda.balanceOf(address(vault)) == stockBefore, "partial sell moved stock");
