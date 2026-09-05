@@ -24,6 +24,7 @@ SECRET_MARKERS = (
     "EXECUTOR_PRIVATE_KEY=0x",
     "DATABASE_URL=postgresql://",
 )
+SELF = "scripts/validate_repo.py"
 
 
 def fail(message: str) -> None:
@@ -47,6 +48,8 @@ def main() -> None:
         fail(f"Forbidden secret file(s) tracked: {', '.join(leaked)}")
 
     for relative in tracked:
+        if relative == SELF:
+            continue
         path = ROOT / relative
         if not path.is_file() or path.stat().st_size > 2_000_000:
             continue
