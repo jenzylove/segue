@@ -13,19 +13,14 @@ interface IForgeVm {
 }
 
 /// @notice Base-mainnet deployment for Segue's M2 transaction proof.
-/// @dev Addresses for the settlement token and B20/feed pair come from .env so they can
-///      be independently checked against the official Base/Chainlink sources immediately
-///      before broadcast. No secret is committed to the repository.
+/// @dev Public token/feed addresses and the execution target come from .env so they can
+///      be independently checked immediately before broadcast. No secret is committed.
 contract DeployMainnet {
     IForgeVm internal constant VM = IForgeVm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     uint256 internal constant BASE_CHAIN_ID = 8453;
     uint32 internal constant USDC_MAX_STALENESS = 2 hours;
     uint32 internal constant EQUITY_MAX_STALENESS = 6 hours;
-
-    // 0x AllowanceHolder for Cancun-hardfork chains, including Base.
-    // Source: https://docs.0x.org/docs/core-concepts/contracts
-    address internal constant ALLOWANCE_HOLDER = 0x0000000000001fF3684f28c67538d4D072C22734;
 
     error WrongChain(uint256 actual);
     error DeployerMismatch(address expected, address actual);
@@ -42,6 +37,10 @@ contract DeployMainnet {
         address usdcFeed = VM.envAddress("USDC_FEED_ADDRESS");
         address b20Token = VM.envAddress("B20_TOKEN_ADDRESS");
         address b20Feed = VM.envAddress("B20_FEED_ADDRESS");
+        // M2 preflight resolves this from 1inch's live /approve/spender endpoint.
+        // Keeping it explicit makes the vault/factory provider-agnostic while preserving
+        // an immutable, narrow execution boundary after deployment.
+        address executionTarget = VM.envAddress("EXECUTION_TARGET_ADDRESS");
 
         VM.startBroadcast(privateKey);
 
@@ -49,7 +48,7 @@ contract DeployMainnet {
         registry.registerAsset(usdc, usdcFeed, USDC_MAX_STALENESS, false);
         registry.registerAsset(b20Token, b20Feed, EQUITY_MAX_STALENESS, true);
 
-        factory = new StockPolicyVaultFactory(address(registry), usdc, ALLOWANCE_HOLDER);
+        factory = new StockPolicyVaultFactory(address(registry), usdc, executionTarget);
 
         VM.stopBroadcast();
     }
