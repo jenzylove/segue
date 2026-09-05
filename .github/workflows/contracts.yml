@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'script/**'
       - 'test/**'
       - 'foundry.toml'
       - '.github/workflows/contracts.yml'
   pull_request:
     paths:
       - 'src/**'
+      - 'script/**'
       - 'test/**'
       - 'foundry.toml'
       - '.github/workflows/contracts.yml'
