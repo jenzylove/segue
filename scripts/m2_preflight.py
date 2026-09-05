@@ -19,6 +19,7 @@ from pathlib import Path
 BASE_CHAIN_ID = 8453
 DECIMALS_SELECTOR = "0x313ce567"
 LATEST_ROUND_DATA_SELECTOR = "0xfeaf968c"
+USER_AGENT = "Mozilla/5.0 (compatible; Segue-M2-Preflight/1.0)"
 
 REQUIRED = (
     "BASE_RPC_URL",
@@ -45,13 +46,36 @@ def load_dotenv(path: str = ".env") -> None:
         os.environ.setdefault(key, value)
 
 
+def safe_host(url: str) -> str:
+    """Return only the hostname so provider keys/path tokens never reach logs."""
+    return urllib.parse.urlparse(url).hostname or "configured RPC"
+
+
 def rpc(method: str, params: list) -> str:
+    url = os.environ["BASE_RPC_URL"]
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     req = urllib.request.Request(
-        os.environ["BASE_RPC_URL"], body, {"Content-Type": "application/json"}
+        url,
+        body,
+        {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # Some RPC gateways sit behind Cloudflare/WAF rules that reject
+            # urllib's default `Python-urllib/x.y` user agent with HTTP 403.
+            "User-Agent": USER_AGENT,
+        },
     )
-    with urllib.request.urlopen(req, timeout=20) as response:
-        payload = json.load(response)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", "replace")[:500]
+        raise RuntimeError(
+            f"RPC {method} via {safe_host(url)} failed HTTP {exc.code}: {error_body}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"RPC {method} via {safe_host(url)} failed: {exc.reason}") from exc
+
     if "error" in payload:
         raise RuntimeError(f"RPC {method} failed: {payload['error']}")
     return payload["result"]
@@ -117,6 +141,7 @@ def check_zerox_route() -> None:
             "0x-api-key": os.environ["ZEROX_API_KEY"],
             "0x-version": "v2",
             "Accept": "application/json",
+            "User-Agent": USER_AGENT,
         },
     )
     try:
