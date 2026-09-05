@@ -1,0 +1,32 @@
+name: contracts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'foundry.toml'
+      - '.github/workflows/contracts.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'foundry.toml'
+      - '.github/workflows/contracts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  forge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Build
+        run: forge build
+      - name: Test
+        run: forge test -vv
