@@ -4,18 +4,36 @@ This ledger stays live for the entire build. Do not let planned integrations sil
 
 | Integration | Purpose | Required | Credential | Status | Completion evidence |
 |---|---|---:|---|---|---|
-| Base mainnet | execution network | YES | Base ETH | planned | deployed contracts + real tx |
-| Coinbase B20 assets | tokenized stocks | YES | none | planned | verified official addresses in registry |
-| Chainlink total-return feeds | trigger + valuation truth | YES | none | planned | contract reads official feed |
-| 0x Swap API | B20 quote/routing | YES | `ZEROX_API_KEY` | planned | real quote + buy + sell |
-| CDP/Base RPC | reliable chain access | YES | `BASE_RPC_URL` | planned | deployed services use private RPC |
-| ERC-8021 Builder Code | Base attribution | YES | `BASE_BUILDER_CODE` | planned | attribution on evidence tx |
-| PostgreSQL | worker checkpoints/history cache | YES | `DATABASE_URL` | planned | restart-safe worker reconciliation |
-| Real chart source | trading context UI | YES for frontend | TBD | planned | labelled live chart renders |
+| Base mainnet | execution network | YES | Base ETH | planned | M2: deployed contracts + real tx |
+| Coinbase B20 assets | tokenized stocks | YES | none | planned | M2: verified official addresses in registry |
+| Chainlink total-return feeds | trigger + valuation truth | YES | none | locally tested | M1 `AssetRegistry` + vault condition path pass mocked feed tests; M2 must verify official Base feeds onchain |
+| 0x Swap API | B20 quote/routing | YES | `ZEROX_API_KEY` | adapter implemented | M1 bounded AllowanceHolder execution boundary is implemented and mock-tested; real 0x quote/buy/sell remains M2 |
+| CDP/Base RPC | reliable chain access | YES | `BASE_RPC_URL` | credentials obtained | Builder obtained a private Base mainnet endpoint; value remains secret. M2 must prove deployed services use it |
+| ERC-8021 Builder Code | Base attribution | YES | `BASE_BUILDER_CODE` | planned | Base app created; domain registration/attributed evidence tx remain deployment-stage work |
+| PostgreSQL | worker checkpoints/history cache | YES | `DATABASE_URL` | planned | M4: restart-safe worker reconciliation |
+| Real chart source | trading context UI | YES for frontend | TBD | planned | M5: labelled live chart renders |
 | AI provider | optional rule parser | NO | none | deferred | not part of core submission |
 | Telegram/Telegraph | none | NO | none | rejected | do not add |
 | Firestore/Vertex | none | NO | none | rejected | do not add |
 | Chainlink Automation | none for MVP | NO | none | rejected | worker handles automation |
+
+## M1 integration boundary
+
+M1 deliberately proves contract behavior without claiming external/mainnet verification:
+
+- `AssetRegistry` stores immutable token/feed pairs, normalizes prices to 1e8, and rejects invalid, incomplete, inactive, or stale feeds.
+- `StockPolicyVault` rechecks the condition at execution time and computes a Chainlink-price-based minimum output before state can advance.
+- the 0x integration boundary is fixed to the configured allowance/execution contract; the worker may supply route calldata but receives only the exact sell allowance resolved from the stored rule.
+- a step advances only after the exact stored sell amount leaves the vault and at least the minimum verified buy-token amount arrives.
+
+No production B20 address, Chainlink feed, 0x API response, or Base mainnet transaction is claimed yet. Those are M2 gates B1–B4.
+
+## Credential status
+
+- `BASE_RPC_URL`: obtained; never commit or paste the full private endpoint.
+- `EXECUTOR_PRIVATE_KEY`: obtained; never commit or paste it.
+- `ZEROX_API_KEY`: pending because the 0x dashboard signup is currently failing for the builder; this does not block M1 but **does block M2's real quote/trade evidence**.
+- `BASE_BUILDER_CODE`: app setup started; domain verification waits for a deployed Segue URL and is not an M1 blocker.
 
 ## Status vocabulary
 
