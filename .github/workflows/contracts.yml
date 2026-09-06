@@ -8,6 +8,7 @@ on:
       - 'script/**'
       - 'test/**'
       - 'foundry.toml'
+      - 'scripts/verify_m2_artifacts.py'
       - '.github/workflows/contracts.yml'
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - 'script/**'
       - 'test/**'
       - 'foundry.toml'
+      - 'scripts/verify_m2_artifacts.py'
       - '.github/workflows/contracts.yml'
 
 permissions:
@@ -30,5 +32,7 @@ jobs:
           version: stable
       - name: Build
         run: forge build
+      - name: Verify M2 artifact selectors
+        run: python scripts/verify_m2_artifacts.py
       - name: Test
         run: forge test -vv
