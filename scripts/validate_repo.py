@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 
@@ -43,9 +42,9 @@ def main() -> None:
     if leaked:
         fail(f"Forbidden secret file(s) tracked: {', '.join(leaked)}")
 
-    assignment_patterns = {
-        key: re.compile(rf"(?m)^\s*{re.escape(key)}\s*=\s*(\S.+?)\s*$") for key in SECRET_ASSIGNMENTS
-    }
+    # Scan line-by-line so an intentionally blank example such as
+    # `EXECUTOR_PRIVATE_KEY=` cannot accidentally consume the next line as its
+    # value. Any non-empty tracked assignment is treated as a potential leak.
     for relative in tracked:
         if relative == SELF:
             continue
@@ -56,10 +55,15 @@ def main() -> None:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        for key, pattern in assignment_patterns.items():
-            match = pattern.search(text)
-            if match and relative != ".env.example":
-                fail(f"Potential committed {key} value in tracked file: {relative}")
+        for line in text.splitlines():
+            stripped = line.strip()
+            for key in SECRET_ASSIGNMENTS:
+                prefix = f"{key}="
+                if not stripped.startswith(prefix):
+                    continue
+                value = stripped[len(prefix):].strip()
+                if value and relative != ".env.example":
+                    fail(f"Potential committed {key} value in tracked file: {relative}")
 
     for relative in PROVIDER_DOCS:
         text = (ROOT / relative).read_text(encoding="utf-8")
