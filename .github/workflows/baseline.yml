@@ -18,4 +18,6 @@ jobs:
       - name: Validate repository source of truth
         run: python scripts/validate_repo.py
       - name: Compile helper scripts
-        run: python -m compileall -q scripts
+        run: python -m compileall -q scripts tests
+      - name: Test M2 provider validation
+        run: python -m unittest discover -s tests -p 'test_*.py' -v

@@ -75,7 +75,7 @@ Mocks are allowed in automated tests only.
 ## 9. Real data has named provenance
 - B20 tokens: Base official verified list.
 - trigger/value prices: official Chainlink total-return feeds.
-- executable routing: 0x.
+- executable routing: 1inch Classic Swap API using the preflight-resolved fixed execution target.
 - onchain state: Base RPC/contracts.
 - chart context: real external market data, clearly labelled.
 
@@ -101,7 +101,8 @@ The contract must revalidate the condition at execution time.
 ## 12. Secrets never enter Git
 Never commit:
 - private keys;
-- 0x API keys;
+- 1inch API keys;
+- legacy 0x API keys;
 - private RPC URLs/tokens;
 - database passwords;
 - deployment credentials.
@@ -130,7 +131,9 @@ A browser/mainnet bug must not be fixed only by hand if it can be reproduced in 
 Do not add AI recommendations, lending, social features, extra chains, complex branching, notifications, analytics dashboards, or unrelated integrations until the PRD's required mainnet loop is complete.
 
 ## 17. No provider swapping for convenience
-Do not replace Base, official B20 assets, Chainlink total-return feeds, 0x, the bounded vault architecture, or the FastAPI worker without verified evidence that the locked path cannot satisfy the required outcome.
+Do not replace Base, official B20 assets, Chainlink total-return feeds, the current verified 1inch route, the bounded vault architecture, or the FastAPI worker without verified evidence that the locked path cannot satisfy the required outcome.
+
+The original 0x path was replaced only after a real Base-mainnet NVDAc request produced the documented provider-side RWA authorization blocker. That decision is recorded in `PRD.md`; it is not permission for further convenience swaps.
 
 ## 18. Never trust agent reports alone
 When another coding agent says a milestone is complete:

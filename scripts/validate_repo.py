@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -19,12 +20,9 @@ REQUIRED = [
 ]
 
 FORBIDDEN_TRACKED_NAMES = {".env", ".env.local", ".env.production", ".env.development"}
-SECRET_MARKERS = (
-    "ZEROX_API_KEY=0x",
-    "EXECUTOR_PRIVATE_KEY=0x",
-    "DATABASE_URL=postgresql://",
-)
+SECRET_ASSIGNMENTS = ("EXECUTOR_PRIVATE_KEY", "ONEINCH_API_KEY", "ZEROX_API_KEY", "DATABASE_URL")
 SELF = "scripts/validate_repo.py"
+PROVIDER_DOCS = ("PRD.md", "AGENTS.md", "BUILD_RULES.md", "docs/ARCHITECTURE.md", "docs/INTEGRATIONS.md")
 
 
 def fail(message: str) -> None:
@@ -34,19 +32,20 @@ def fail(message: str) -> None:
 def main() -> None:
     missing = [path for path in REQUIRED if not (ROOT / path).exists()]
     if missing:
-        fail(f"Missing required M0 files: {', '.join(missing)}")
+        fail(f"Missing required source-of-truth files: {', '.join(missing)}")
 
     with (ROOT / "config/assets.schema.json").open("r", encoding="utf-8") as fh:
         json.load(fh)
 
-    tracked = subprocess.check_output(
-        ["git", "ls-files"], cwd=ROOT, text=True
-    ).splitlines()
+    tracked = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
     tracked_names = {Path(path).name for path in tracked}
     leaked = sorted(FORBIDDEN_TRACKED_NAMES & tracked_names)
     if leaked:
         fail(f"Forbidden secret file(s) tracked: {', '.join(leaked)}")
 
+    assignment_patterns = {
+        key: re.compile(rf"(?m)^\s*{re.escape(key)}\s*=\s*(\S.+?)\s*$") for key in SECRET_ASSIGNMENTS
+    }
     for relative in tracked:
         if relative == SELF:
             continue
@@ -57,11 +56,17 @@ def main() -> None:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        for marker in SECRET_MARKERS:
-            if marker in text and relative != ".env.example":
-                fail(f"Potential secret marker in tracked file: {relative}")
+        for key, pattern in assignment_patterns.items():
+            match = pattern.search(text)
+            if match and relative != ".env.example":
+                fail(f"Potential committed {key} value in tracked file: {relative}")
 
-    print("M0 repository baseline OK")
+    for relative in PROVIDER_DOCS:
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        if "1inch" not in text:
+            fail(f"Provider source-of-truth drift: {relative} does not mention current 1inch path")
+
+    print("Repository/source-of-truth baseline OK")
 
 
 if __name__ == "__main__":
