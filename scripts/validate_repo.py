@@ -19,7 +19,13 @@ REQUIRED = [
 ]
 
 FORBIDDEN_TRACKED_NAMES = {".env", ".env.local", ".env.production", ".env.development"}
-SECRET_ASSIGNMENTS = ("EXECUTOR_PRIVATE_KEY", "ONEINCH_API_KEY", "ZEROX_API_KEY", "DATABASE_URL")
+SECRET_ASSIGNMENTS = (
+    "EXECUTOR_PRIVATE_KEY",
+    "DEMO_OWNER_PRIVATE_KEY",
+    "ONEINCH_API_KEY",
+    "ZEROX_API_KEY",
+    "DATABASE_URL",
+)
 SELF = "scripts/validate_repo.py"
 PROVIDER_DOCS = ("PRD.md", "AGENTS.md", "BUILD_RULES.md", "docs/ARCHITECTURE.md", "docs/INTEGRATIONS.md")
 
@@ -42,9 +48,8 @@ def main() -> None:
     if leaked:
         fail(f"Forbidden secret file(s) tracked: {', '.join(leaked)}")
 
-    # Scan line-by-line so an intentionally blank example such as
-    # `EXECUTOR_PRIVATE_KEY=` cannot accidentally consume the next line as its
-    # value. Any non-empty tracked assignment is treated as a potential leak.
+    # Scan line-by-line so an intentionally blank example cannot consume the next
+    # line as its value. Any non-empty tracked secret assignment is a potential leak.
     for relative in tracked:
         if relative == SELF:
             continue
