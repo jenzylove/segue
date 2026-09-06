@@ -5,10 +5,15 @@ No third-party Python packages are required. The script loads .env when present,
 checks Base RPC, public contract/feed addresses, deployer gas balance, and a real
 1inch Classic Swap route for the configured Coinbase B20 asset. It never prints
 secrets or the full private RPC URL.
+
+Deployment and trade readiness are deliberately separate: stale equity data blocks
+policy creation/execution, but it does not make deploying the immutable registry and
+factory unsafe. Use --require-fresh-feeds immediately before the real trade proof.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -21,7 +26,7 @@ from pathlib import Path
 BASE_CHAIN_ID = 8453
 DECIMALS_SELECTOR = "0x313ce567"
 LATEST_ROUND_DATA_SELECTOR = "0xfeaf968c"
-USER_AGENT = "Mozilla/5.0 (compatible; Segue-M2-Preflight/1.1)"
+USER_AGENT = "Mozilla/5.0 (compatible; Segue-M2-Preflight/1.2)"
 USDC_MAX_STALENESS = 2 * 60 * 60
 EQUITY_MAX_STALENESS = 6 * 60 * 60
 ONEINCH_BASE_URL = f"https://api.1inch.com/swap/v6.1/{BASE_CHAIN_ID}"
@@ -52,7 +57,6 @@ def load_dotenv(path: str = ".env") -> None:
 
 
 def safe_host(url: str) -> str:
-    """Return only the hostname so provider keys/path tokens never reach logs."""
     return urllib.parse.urlparse(url).hostname or "configured RPC"
 
 
@@ -62,11 +66,7 @@ def rpc(method: str, params: list) -> str:
     req = urllib.request.Request(
         url,
         body,
-        {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": USER_AGENT,
-        },
+        {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=20) as response:
@@ -116,7 +116,7 @@ def check_token(label: str, address: str) -> int:
     return decimals
 
 
-def check_feed(label: str, address: str, max_staleness: int) -> tuple[int, int, int]:
+def check_feed(label: str, address: str, max_staleness: int) -> tuple[int, int, int, bool]:
     decimals = uint_word(eth_call(address, DECIMALS_SELECTOR))
     data = eth_call(address, LATEST_ROUND_DATA_SELECTOR)
     answer = int_word(data, 1)
@@ -125,16 +125,13 @@ def check_feed(label: str, address: str, max_staleness: int) -> tuple[int, int, 
         raise RuntimeError(f"{label} returned invalid latestRoundData")
 
     age = max(0, int(time.time()) - updated_at)
+    fresh = age <= max_staleness
+    state = "fresh" if fresh else "STALE FOR TRADE"
     print(
         f"  {label}: feed decimals={decimals}, answer={answer}, "
-        f"updatedAt={updated_at}, age={age / 3600:.2f}h"
+        f"updatedAt={updated_at}, age={age / 3600:.2f}h — {state}"
     )
-    if age > max_staleness:
-        raise RuntimeError(
-            f"{label} is stale for Segue: age={age / 3600:.2f}h, "
-            f"max={max_staleness / 3600:.0f}h"
-        )
-    return answer, updated_at, age
+    return answer, updated_at, age, fresh
 
 
 def oneinch_get(path: str, params: dict[str, str] | None = None) -> dict:
@@ -159,7 +156,7 @@ def oneinch_get(path: str, params: dict[str, str] | None = None) -> dict:
         raise RuntimeError(f"1inch {path} failed: {exc.reason}") from exc
 
 
-def check_oneinch_route() -> str:
+def check_oneinch_route() -> tuple[str, bool]:
     spender_payload = oneinch_get("approve/spender")
     spender = str(spender_payload.get("address") or "")
     if not spender.startswith("0x") or len(spender) != 42:
@@ -183,6 +180,7 @@ def check_oneinch_route() -> str:
     print(f"  1inch execution target: {spender}")
 
     configured = os.environ.get("EXECUTION_TARGET_ADDRESS", "").strip()
+    configured_ok = bool(configured)
     if configured and configured.lower() != spender.lower():
         raise RuntimeError(
             "EXECUTION_TARGET_ADDRESS does not match 1inch approve/spender; "
@@ -204,10 +202,18 @@ def check_oneinch_route() -> str:
         ),
         encoding="utf-8",
     )
-    return spender
+    return spender, configured_ok
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Segue M2 Base-mainnet readiness checks")
+    parser.add_argument(
+        "--require-fresh-feeds",
+        action="store_true",
+        help="fail unless both configured Chainlink feeds are within the contract staleness limits",
+    )
+    args = parser.parse_args(argv)
+
     load_dotenv()
     missing = [name for name in REQUIRED if not os.environ.get(name)]
     if missing:
@@ -225,8 +231,6 @@ def main() -> int:
     eth_balance = int(rpc("eth_getBalance", [executor, "latest"]), 16)
     print(f"  executor: {executor}")
     print(f"  executor ETH: {eth_balance / 10**18:.8f}")
-    if eth_balance == 0:
-        print("  executor gas: BLOCKED — fund with a small amount of Base ETH before deployment/execution")
 
     for label, key in (
         ("USDC", "USDC_ADDRESS"),
@@ -239,26 +243,51 @@ def main() -> int:
     check_token("USDC", os.environ["USDC_ADDRESS"])
     check_token("B20 token", os.environ["B20_TOKEN_ADDRESS"])
 
-    # Provider route is checked before freshness so a weekend-stale equity feed does
-    # not hide whether the replacement execution rail actually supports Coinbase B20.
-    execution_target = check_oneinch_route()
+    # Prove provider support before checking feed hours so a weekend/holiday stale
+    # equity feed never hides the answer to the current 1inch route question.
+    execution_target, target_configured = check_oneinch_route()
 
-    check_feed("USDC/USD", os.environ["USDC_FEED_ADDRESS"], USDC_MAX_STALENESS)
-    check_feed("B20 total-return", os.environ["B20_FEED_ADDRESS"], EQUITY_MAX_STALENESS)
+    _, _, _, usdc_fresh = check_feed("USDC/USD", os.environ["USDC_FEED_ADDRESS"], USDC_MAX_STALENESS)
+    _, _, _, equity_fresh = check_feed(
+        "B20 total-return", os.environ["B20_FEED_ADDRESS"], EQUITY_MAX_STALENESS
+    )
+    feeds_fresh = usdc_fresh and equity_fresh
 
+    deployment_blockers: list[str] = []
     if eth_balance == 0:
-        raise RuntimeError("executor has zero Base ETH for deployment/execution gas")
+        deployment_blockers.append("executor has zero Base ETH for deployment gas")
+    if not target_configured:
+        deployment_blockers.append(f"set EXECUTION_TARGET_ADDRESS={execution_target} in local .env, then rerun")
 
-    print("M2 PREFLIGHT: PASS")
-    print(f"Set EXECUTION_TARGET_ADDRESS={execution_target} in .env before deployment.")
+    if deployment_blockers:
+        print("M2 DEPLOYMENT PREFLIGHT: BLOCKED")
+        for blocker in deployment_blockers:
+            print(f"  - {blocker}")
+    else:
+        print("M2 DEPLOYMENT PREFLIGHT: PASS")
+
+    if feeds_fresh and not deployment_blockers:
+        print("M2 TRADE READINESS: PASS")
+    else:
+        print("M2 TRADE READINESS: BLOCKED")
+        if not feeds_fresh:
+            print("  - one or more Chainlink feeds exceed Segue's configured staleness limit")
+        for blocker in deployment_blockers:
+            print(f"  - {blocker}")
+
     print("Saved public route evidence to .local/m2-preflight.json.")
-    print("This proves RPC/feed/token/1inch route readiness only. It does NOT prove B1-B4 or execute a transaction.")
+    print("No transaction was broadcast.")
+
+    if deployment_blockers:
+        return 2
+    if args.require_fresh_feeds and not feeds_fresh:
+        return 3
     return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as exc:  # noqa: BLE001 - CLI must fail closed with one concise reason.
+    except Exception as exc:  # noqa: BLE001
         print(f"M2 PREFLIGHT: FAIL — {exc}", file=sys.stderr)
         raise SystemExit(1)
