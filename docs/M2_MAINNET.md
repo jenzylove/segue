@@ -30,25 +30,11 @@ The Python scripts load `.env` themselves. In PowerShell:
 python scripts/m2_preflight.py
 ```
 
-The preflight checks, in order:
+The preflight checks Base mainnet RPC, executor gas, official token/feed interfaces, a live 1inch USDC → B20 route, the live 1inch `approve/spender` target, configured-target equality, and current Chainlink feed age.
 
-- Base mainnet RPC (`8453`);
-- executor Base ETH balance;
-- official token/feed interfaces;
-- 1inch USDC → B20 route availability;
-- live 1inch `approve/spender` execution target;
-- configured target equality if `EXECUTION_TARGET_ADDRESS` is already set;
-- current Chainlink feed age.
+Feed age is reported separately from deployment readiness. A stale equity feed blocks policy creation/trading, but it does **not** make deploying the immutable registry/factory unsafe. The contract itself fails closed if anyone tries to consume stale price data.
 
-Feed age is reported separately from deployment readiness. A stale equity feed blocks policy creation/trading, but it does **not** make deploying the immutable registry/factory unsafe. The contract itself will fail closed if anyone tries to consume stale price data.
-
-On the first successful route lookup, copy the printed **public** target into local `.env`:
-
-```text
-EXECUTION_TARGET_ADDRESS=0x...
-```
-
-Then rerun preflight. `M2 DEPLOYMENT PREFLIGHT: PASS` requires the live target to match and the executor to have Base ETH for gas.
+On the first successful route lookup, copy the printed **public** target into local `.env` as `EXECUTION_TARGET_ADDRESS`, then rerun preflight. `M2 DEPLOYMENT PREFLIGHT: PASS` requires the live target to match and the executor to have Base ETH for gas.
 
 No preflight result is B1-B4 and no transaction is broadcast.
 
@@ -75,70 +61,51 @@ The verifier checks the registry owner, factory registry/USDC/frozen execution t
 
 The demo owner is intentionally separate from the automation executor. It needs a small Base ETH gas balance and at least the tiny USDC amount configured by `M2_BUY_USDC_ATOMIC` (default 1 USDC).
 
-Run:
-
 ```powershell
 forge script script/PrepareM2Vault.s.sol:PrepareM2Vault --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
 ```
 
-The script:
+This creates that owner's canonical vault if needed, sets the dedicated executor, and funds the vault only up to the tiny proof amount. It does not read the equity price, so it can run while the market feed is stale.
 
-- verifies the demo-owner key/address pair;
-- creates that owner's one canonical Segue vault if needed;
-- sets the dedicated executor on creation;
-- funds the vault only up to the configured tiny M2 USDC amount;
-- never gives the executor ownership/withdrawal authority;
-- does not read the equity price, so it can run while the market feed is stale.
-
-Resolve the public vault address from the factory and save it locally:
+Resolve the public vault address from the factory:
 
 ```powershell
 cast call $env:FACTORY_ADDRESS "vaultOf(address)(address)" $env:DEMO_OWNER_ADDRESS --rpc-url $env:BASE_RPC_URL
 ```
 
-Set the returned address as `DEMO_VAULT_ADDRESS` in `.env`.
+Save the returned address as `DEMO_VAULT_ADDRESS` in local `.env`.
 
 ## Gate D — fresh feed + two-step round-trip policy
 
-Immediately before creating the policy/trading, require the same freshness limits enforced by the contract:
+Immediately before creating the policy/trading:
 
 ```powershell
 python scripts/m2_preflight.py --require-fresh-feeds
 ```
 
-Only after `M2 TRADE READINESS: PASS`, create the real two-step policy:
+Only after `M2 TRADE READINESS: PASS`:
 
 ```powershell
 forge script script/CreateM2RoundTripPolicy.s.sol:CreateM2RoundTripPolicy --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
+python scripts/m2_condition_probe.py --policy-id 1 --expect ready
 ```
 
-The policy is deliberately tiny and deterministic for evidence:
+The tiny policy is:
 
 1. if the live NVDAc total-return feed remains above a bounded threshold just below its policy-creation price, spend exactly `M2_BUY_USDC_ATOMIC` USDC to buy NVDAc;
 2. only after step 1 succeeds, sell 100% of the acquired NVDAc back to USDC through the same fixed execution target.
 
-`M2_TRIGGER_BUFFER_BPS`, `M2_MAX_DEVIATION_BPS`, and `M2_POLICY_TTL_SECONDS` are explicit local parameters. The default trigger buffer is 5%, the max execution deviation is 5%, and the proof policy expires after one hour. The vault still re-reads the Chainlink feed at each execution.
-
-For the first demo vault `M2_POLICY_ID=1`. Verify the active policy id if needed:
-
-```powershell
-cast call $env:DEMO_VAULT_ADDRESS "activePolicyId()(uint256)" --rpc-url $env:BASE_RPC_URL
-```
+The condition probe is a read-only Base call to the deployed vault's `previewExecution` and saves `.local/m2-condition-1.json`. It must report `READY` before the buy.
 
 ## Gate E — B1/B2 real buy
-
-Fetch and validate the firm 1inch transaction:
 
 ```powershell
 python scripts/m2_firm_quote.py --direction buy
 ```
 
-This validates the exact token pair, `from=vault`, `origin=executor`, `receiver=vault`, frozen `tx.to`, non-empty calldata, zero native value, and disables partial fill. It writes:
+The helper validates the exact token pair, `from=vault`, `origin=executor`, `receiver=vault`, frozen `tx.to`, non-empty calldata, zero native value, and no partial fill. It writes `.local/m2-quote-buy.json` and `.local/m2-calldata-buy.txt`.
 
-- `.local/m2-quote-buy.json`
-- `.local/m2-calldata-buy.txt`
-
-Load only the public router calldata into the shell and broadcast through the vault:
+Broadcast only through the bounded vault:
 
 ```powershell
 $env:M2_ROUTE_CALLDATA=(Get-Content .local/m2-calldata-buy.txt -Raw).Trim()
@@ -146,13 +113,11 @@ forge script script/ExecuteM2Quote.s.sol:ExecuteM2Quote --rpc-url $env:BASE_RPC_
 Remove-Item Env:M2_ROUTE_CALLDATA
 ```
 
-The executor EOA never calls 1inch directly. `ExecuteM2Quote` verifies the vault executor, frozen target and `previewExecution`, then calls `vault.executeStep`. The vault itself grants the exact allowance, calls the fixed target, checks exact sell + minimum B20 receipt, and only then activates step 2.
-
-A firm provider response alone is **B1 evidence**, not B2. B2 requires the successful Base receipt plus before/after vault balances.
+The executor EOA never calls 1inch directly. A firm provider response is **B1 evidence**; B2 requires the successful Base receipt plus before/after vault balances.
 
 ## Gate F — B3 real sell
 
-After B2 succeeds, fetch the reverse route. By default the helper reads the vault's actual NVDAc balance, so no guessed sell amount is needed:
+After B2 succeeds, the helper defaults to the vault's actual NVDAc balance:
 
 ```powershell
 python scripts/m2_firm_quote.py --direction sell
@@ -161,11 +126,28 @@ forge script script/ExecuteM2Quote.s.sol:ExecuteM2Quote --rpc-url $env:BASE_RPC_
 Remove-Item Env:M2_ROUTE_CALLDATA
 ```
 
-This must complete the same onchain policy and return the B20 exposure to USDC through the same bounded path.
+The second execution must complete the same policy and return the B20 exposure to USDC through the same bounded path.
 
-## B4 — real condition evidence
+## Gate G — B4 false-condition evidence
 
-The round-trip policy proves the true condition path because both executions re-read the deployed Chainlink-backed registry before they can move funds. B4 is not complete until we also record a deployed false-condition `previewExecution` result (or equivalent failed execution) against the same official feed. Do not weaken the condition just to manufacture this proof.
+After the round-trip policy is `COMPLETED`, the vault has no active policy and `nextPolicyId` should be 2. Keep `M2_FALSE_POLICY_ID=2` unless chain state proves otherwise.
+
+Create a one-step policy whose `PRICE_ABOVE` threshold is deliberately set above the current official feed by `M2_FALSE_TRIGGER_BUFFER_BPS`:
+
+```powershell
+forge script script/CreateM2FalseConditionPolicy.s.sol:CreateM2FalseConditionPolicy --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
+python scripts/m2_condition_probe.py --policy-id 2 --expect false
+```
+
+The probe must report `executable: false` and `reason: CONDITION_FALSE`, and saves `.local/m2-condition-2.json`. This is read-only evidence from the deployed vault against the exact registered Chainlink feed; no fake price or mock is involved.
+
+Then clean up the deliberately false policy with the owner wallet:
+
+```powershell
+forge script script/CancelM2FalsePolicy.s.sol:CancelM2FalsePolicy --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
+```
+
+Together, the pre-buy `READY` capture and the false-policy `CONDITION_FALSE` capture close B4 without weakening the contract or manufacturing a transaction.
 
 ## M2 evidence required
 
@@ -176,15 +158,7 @@ M2 is complete only after all four are recorded in the PRD/integration ledger:
 - **B3:** real B20 → USDC sell through the same bounded path;
 - **B4:** deployed vault reads the official total-return feed and demonstrably rejects a false condition / accepts a true condition, failing safely on stale data.
 
-For every real transaction record:
-
-- tx hash;
-- block number;
-- vault address;
-- sell/buy assets;
-- before/after balances;
-- active step before and after;
-- exact git commit deployed.
+For every real transaction record: tx hash, block number, vault address, sell/buy assets, before/after balances, active step before/after, and exact git commit deployed.
 
 Do not call M2 complete from unit tests, an indicative quote, simulation, or a provider response without the Base transaction.
 
