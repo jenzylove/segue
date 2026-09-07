@@ -1,535 +1,1494 @@
 # Product Requirements Document — Segue
 
 **Product:** Segue  
+**Tagline:** Program what your portfolio does next.  
 **Hackathon:** Base Builder Quest — Tokenized Stocks  
-**Deadline:** September 9, 2026, 11:59 PM EST  
-**Status:** M1 contract state machine complete and locally verified; M2 real Base mainnet integration in progress  
-**Source of truth:** This file is the build contract. Architecture or scope changes require verified blocker evidence and a dated decision entry.
+**Target network:** Base mainnet  
+**Current repository baseline for this revision:** `414916b539f2d360c0caefa43e729e8e6de940e7`  
+**Current build state:** M1 contract state machine complete; M2 production-path tooling prepared; real Base-mainnet B1–B4 evidence still required.  
+**Source of truth:** This PRD is the product/build contract. `BUILD_RULES.md`, `AGENTS.md`, `docs/INTEGRATIONS.md`, `docs/ARCHITECTURE.md`, and milestone-specific docs are subordinate execution documents.
 
 ---
 
-## 1. Product thesis
+# 0. How to use this PRD
 
-**Segue is a conditional execution layer for Coinbase Tokenized Stocks on Base.**
+This document is intentionally detailed so a coding agent can continue Segue without rediscovering the product or silently simplifying the hard parts.
 
-A user defines a dependent stock sequence once, for example:
+It is **not** intended to prevent research or implementation judgment.
 
-> If NVDAc falls 5%, buy $20. After that purchase, if NVDAc rises 8%, sell half. Then, if AAPLc is below my chosen level, rotate the proceeds into AAPLc. Never deploy more than $50 and never execute outside my price-deviation limit.
+## 0.1 Locked product decisions
 
-The user may leave the app. A background worker monitors conditions and attempts execution, while the user's personal smart-contract vault enforces the exact precommitted rule and hard limits onchain.
+Do not change these for convenience:
 
-Segue does **not** predict stocks. It executes rules the user already chose.
+- Segue is a conditional execution layer for **Coinbase Tokenized Stocks (B20) on Base**, not a generic DeFi app.
+- The core differentiator is **dependent multi-step execution**.
+- A later step activates only after the prior trade actually succeeds.
+- A user-owned vault holds strategy funds and enforces the stored policy onchain.
+- The automation worker pays gas/attempts execution but may not withdraw user funds or rewrite a policy.
+- Chainlink total-return feeds are trigger/valuation truth for supported B20 assets.
+- 1inch Classic Swap is the current production routing path after the verified 0x RWA blocker.
+- Base chain state is authoritative for ownership, policy state, balances, and execution state.
+- PostgreSQL is an index/cache/history layer, never the authority for whether an onchain policy exists.
+- No fake market data, fake trades, fake hashes, or frontend-only state may be presented as production evidence.
 
-### Problem
+## 0.2 Research-open areas
 
-Coinbase Tokenized Stocks can trade 24/7, but users still need to monitor markets and manually decide what happens next. Existing products already cover manual swaps, single limit/stop orders, DCA and portfolio rebalancing. Segue targets the gap between them: **dependent multi-step execution** where each next action becomes active only after the previous action really succeeds.
+The coding agent **should research** unresolved external facts before implementing them. Examples:
 
-### Job to be done
+- which additional B20 stocks beyond the M2 proof asset should appear in the final curated frontend catalogue;
+- exact current official token/feed metadata for those additional assets;
+- the best real chart-data provider that is practical for the hackathon;
+- current 1inch API response details and current approved spender/execution target;
+- deployment platform details for the worker, PostgreSQL, and frontend;
+- exact current Base Builder Code integration steps;
+- current hackathon submission mechanics if they change.
 
-> “I know the rules I want to follow. Execute them for me when the conditions occur, in the order I specified, without making me watch the market all day.”
+Research rules:
 
-### Target user
+1. Prefer official Base, Coinbase, Chainlink, 1inch, and ERC/Base documentation.
+2. Verify live onchain/provider behavior where the product depends on it.
+3. Record important external facts and provenance in `docs/INTEGRATIONS.md` or the relevant milestone doc.
+4. Do not invent addresses, tickers, feeds, provider capabilities, or compliance claims.
+5. If new verified evidence makes a locked implementation path impossible, preserve the product thesis, document the blocker, propose the smallest replacement, and add a dated decision entry before changing architecture.
 
-Rules-based investors/traders in eligible non-US jurisdictions who want Coinbase Tokenized Stock exposure, strict capital limits and an auditable onchain trail without continuous monitoring.
+## 0.3 Status vocabulary
 
-The app must not enable B20 trading for U.S. users. The frontend must include an eligibility acknowledgement and clearly state the jurisdiction limitation.
+Use these terms precisely:
+
+- **planned** — described but no implementation yet;
+- **implemented** — code exists;
+- **locally tested** — local/unit/integration tests pass;
+- **real provider tested** — live external provider call succeeded;
+- **mainnet verified** — real Base-mainnet state/transaction proves the claim;
+- **deployed** — released to the target environment;
+- **browser verified** — real public browser flow exercised successfully;
+- **blocked** — verified external/internal blocker prevents the required outcome;
+- **deferred** — intentionally outside current required scope.
+
+Never collapse these into “done.”
 
 ---
 
-## 2. Differentiation and non-goals
+# 1. Product thesis
 
-A normal limit order:
+**Segue is an outcome-independent, rule-driven conditional execution layer for Coinbase Tokenized Stocks on Base.**
 
-`NVDA <= X → buy`
+The user decides the strategy. Segue executes it when the user’s precommitted conditions become true.
 
-Segue:
+Example:
 
-`condition → trade → new reference → next condition → next trade → ...`
+> If NVDAc falls 5% from the price when this step becomes active, buy $20. After that purchase succeeds, if NVDAc rises 8% from the new reference price, sell 50% of the position. Then, if another verified B20 stock reaches my chosen condition, rotate the proceeds into it. Never deploy more than $50 and never accept execution beyond my chosen deviation limit.
 
-The differentiator is **the sequence**, not merely automation.
+The user may leave the browser. Segue continues monitoring and can advance the sequence later.
 
-Do not turn the MVP into:
-- a generic brokerage;
-- an AI stock picker or “AI, buy NVDA” assistant;
-- a DCA-only or single-order product;
-- a passive portfolio rebalancer;
-- Avelune TAKE/PASS training;
-- a copy of Sequence's Somnia/DreamDEX architecture;
-- social/copy trading, lending, portfolio optimization, cross-chain deposits, fiat onramp, governance, token issuance, alerts, an agent marketplace or extra DeFi features.
+Segue does **not** predict stocks, recommend trades, decide the next asset, or dynamically rewrite the user’s rules.
 
-AI is not required for the core submission. A plain-language rule parser and deterministic replay/backtest remain deferred until the required mainnet loop is complete.
+## 1.1 Problem
+
+Tokenized stocks can be available outside normal market hours, but the user still faces a manual loop:
+
+`watch price → wait → act → watch again → act again`
+
+Single limit/stop orders solve only one isolated instruction. DCA solves recurring purchases. Rebalancers target a portfolio allocation. None of those is the core Segue job.
+
+Segue targets the gap:
+
+`condition → bounded trade → new reference → next condition → bounded trade → ...`
+
+Each later action exists because the previous one actually completed.
+
+## 1.2 Job to be done
+
+> “I already know the rules I want to follow. Execute them in the order I specified when the conditions occur, without making me monitor the market continuously.”
+
+## 1.3 Target user
+
+Primary target:
+
+- rules-based investor/trader;
+- eligible to access the underlying Coinbase B20 product;
+- wants a small, explicit stock automation rather than an AI recommendation engine;
+- values strict capital limits, transparent conditions, and an auditable onchain trail;
+- may want the strategy to keep running after the app closes.
+
+The MVP is not designed for high-frequency trading, institutional execution, discretionary AI portfolio management, or complex options-like strategies.
+
+## 1.4 Product promise
+
+A judge/user should understand Segue in one sentence:
+
+**Define what should happen next in your tokenized-stock strategy, set the limits once, and let Segue execute each step only when the prior step and the new condition allow it.**
 
 ---
 
-## 3. MVP workflow
+# 2. Product principles
 
-### Conditions
+1. **The sequence is the product.** Do not reduce Segue to a swap page with automation copy.
+2. **User intent is precommitted.** The worker must never invent the next trade.
+3. **Hard limits live onchain.** A malicious/buggy worker should fail against the vault rather than exceed the rule.
+4. **Real data only.** Market context, price truth, routing, transactions, and state must come from real sources on the production path.
+5. **Chain first, cache second.** Recoverability must survive browser/localStorage loss and worker restarts.
+6. **Fail closed.** Stale/invalid oracle data or unsafe execution means do not trade.
+7. **Small proof before polish.** Mainnet buy/sell and autonomous continuation precede major frontend styling work.
+8. **Infrastructure should disappear behind the product.** Lead with stock, condition, action, limits, and sequence—not contract jargon.
 
-Supported deterministic condition types:
+---
+
+# 3. Scope and non-goals
+
+## 3.1 Required MVP capability
+
+A user can:
+
+1. connect an eligible wallet on Base;
+2. inspect a curated set of verified B20 stocks with real market context;
+3. construct a linear sequence of up to 8 deterministic steps;
+4. define each step’s condition, action, amount, expiry, and maximum execution deviation;
+5. define a total deployed-capital limit;
+6. create/reuse their own Segue vault;
+7. fund the vault with required strategy assets;
+8. activate one live policy;
+9. close the app;
+10. have the worker monitor the active step and attempt it when executable;
+11. have the vault independently recheck the condition and economic limits;
+12. advance to the next step only after a successful trade;
+13. reopen the app and recover current/history state from chain/indexed evidence;
+14. cancel/pause/withdraw as the owner;
+15. inspect transaction/evidence history.
+
+## 3.2 Explicit non-goals for the hackathon MVP
+
+Do not add unless the core path is finished and there is a specific approved reason:
+
+- AI stock picking or autonomous recommendations;
+- chat-first trading;
+- social/copy trading;
+- lending/borrowing;
+- leverage/derivatives;
+- governance/token issuance;
+- cross-chain routing/deposits;
+- fiat onramp;
+- tax/accounting suite;
+- generalized agent marketplace;
+- complex branching/OCO trees;
+- arbitrary user-written smart-contract conditions;
+- high-frequency execution;
+- notifications as a substitute for automation;
+- passive portfolio rebalancing as the main product;
+- DCA as the main product;
+- a clone of Sequence’s Somnia/DreamDEX architecture.
+
+Plain-language parsing and deterministic backtesting/replay are optional/deferred until the live required path is complete.
+
+---
+
+# 4. Asset and market model
+
+## 4.1 Settlement asset
+
+Base USDC is the settlement asset.
+
+Current M2 verified public configuration:
+
+- Base chain id: `8453`
+- USDC: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
+- USDC/USD Chainlink feed: `0x7e860098F58bBFC8648a4311b374B1D669a2bc6B`
+
+These values are already present in `.env.example` and M2 tooling. Reverify against the official/current sources before a fresh immutable production deployment if there is any doubt.
+
+## 4.2 M2 proof stock
+
+The locked M2 proof asset is Coinbase NVIDIA tokenized stock (`NVDAc`).
+
+Current verified public configuration:
+
+- NVDAc token: `0xb20000000000000000000078ee7ce2fE4908108C`
+- NVDA total-return Chainlink feed: `0x04689a41629776563E6822F76f2e57D148d28513`
+
+M2 must prove the complete USDC → NVDAc → USDC round trip before the product claims generalized stock execution.
+
+## 4.3 Final frontend stock catalogue
+
+The frontend must **not** be coded as “NVDA only” even though NVDAc is the proof asset.
+
+The catalogue should be registry-driven and support a small curated set of official Coinbase B20 stocks for the final demo/product. Before adding each stock, research and verify:
+
+- canonical company/ticker display name;
+- exact Base B20 token address;
+- token decimals;
+- exact relevant Chainlink total-return feed;
+- feed decimals;
+- observed update behavior / suitable staleness policy;
+- whether 1inch currently returns a valid route for the intended pair;
+- active/paused support state.
+
+Prefer a smaller verified catalogue over a large speculative list. The coding agent may choose the practical number after research, but every displayed “tradable” asset must have provenance.
+
+## 4.4 Registry behavior
+
+`AssetRegistry` is the onchain allowlist/price-source registry.
+
+Important current properties:
+
+- token/feed pairing is immutable once registered;
+- owner may add an asset or pause/resume an existing asset;
+- token and feed decimals are read from chain at registration;
+- prices are normalized to `1e8`;
+- invalid/incomplete/stale feeds revert;
+- supported B20 assets are explicitly marked `isB20`.
+
+Do not identify an asset by ticker alone in execution logic.
+
+## 4.5 Total-return price truth
+
+B20 token/share representation may reflect corporate-action mechanics such as dividends/splits through the B20 multiplier. Segue therefore uses the official Chainlink **total-return feed** for supported equity condition/valuation truth instead of assuming raw token units map permanently to one underlying share.
+
+## 4.6 24/7 trading vs feed freshness
+
+A B20 token may remain tradable while the corresponding equity total-return feed is no longer fresh enough for Segue’s configured policy.
+
+Therefore:
+
+- monitoring may continue 24/7;
+- execution is **not** guaranteed 24/7;
+- a stale trigger/valuation feed must fail closed;
+- product copy must not imply that Segue fabricates fresh equity prices outside the feed’s update window;
+- the UI must expose a meaningful “price feed stale / execution paused until fresh data” state rather than a generic failure.
+
+---
+
+# 5. Sequence language and exact semantics
+
+## 5.1 Sequence shape
+
+MVP sequences are **linear**.
+
+- minimum: 1 step;
+- maximum: 8 steps;
+- exactly one step may be `ACTIVE`;
+- future steps are `QUEUED`;
+- a completed step is `EXECUTED`;
+- cancellation converts remaining active/queued steps to `CANCELLED`;
+- only one policy may be live in a user vault at a time in the current contract architecture;
+- historical completed/cancelled policies may coexist with the current policy.
+
+Concurrent live sequences per vault are deferred.
+
+## 5.2 Condition types
+
+Supported deterministic conditions:
+
 1. `PRICE_ABOVE`
 2. `PRICE_BELOW`
 3. `UP_BPS_FROM_REFERENCE`
 4. `DOWN_BPS_FROM_REFERENCE`
 
-Reference price is captured when the first step activates and again only after a successful prior step activates the next one.
+### Absolute conditions
 
-Execution conditions use the verified Chainlink total-return feed associated with the supported B20 asset.
+Examples:
 
-### Actions
+- “When NVDAc is at or above $X” → `PRICE_ABOVE`
+- “When NVDAc is at or below $X” → `PRICE_BELOW`
 
-Supported actions:
-1. Base USDC → verified B20 stock.
-2. Verified B20 stock → Base USDC.
-3. Verified B20 stock → another verified B20 stock.
-4. Stop/cancel the sequence.
+Absolute thresholds are expressed in the normalized oracle-price domain expected by the contract/UI conversion layer.
 
-Amount modes:
-- fixed token/USDC amount;
-- 25%, 50%, 75% or 100% of available sell-token balance.
+### Relative conditions
 
-### Sequence semantics
+Examples:
 
-- maximum 8 steps for MVP;
-- exactly one step is `ACTIVE`;
-- later steps remain `QUEUED`;
-- a successful trade marks the active step `EXECUTED`;
-- only then does the next step become active and capture its new reference price;
-- failed, unsafe or reverted execution does not advance state;
-- cancelled/expired policy executes nothing further;
-- each step can execute only once;
-- generic branching/OCO trees are deferred.
+- “When NVDAc rises 8% from this step’s activation price” → `UP_BPS_FROM_REFERENCE`
+- “When NVDAc falls 5% from this step’s activation price” → `DOWN_BPS_FROM_REFERENCE`
+
+Relative conditions use basis points and a **reference price captured when that step becomes active**.
+
+This is crucial: later relative steps must not use the original policy-creation price. A later step receives a fresh reference only after the preceding trade succeeds and the later step activates.
+
+## 5.3 Actions / trading pairs
+
+Supported action classes:
+
+1. USDC → verified B20 stock (buy)
+2. verified B20 stock → USDC (sell)
+3. verified B20 stock → another verified B20 stock (rotate), where the contract’s current pair rules and provider route support it
+4. owner cancels/stops the sequence
+
+The UI may phrase these as **Buy**, **Sell**, and **Rotate**, but must serialize them into the exact stored token pair.
+
+## 5.4 Amount modes
+
+Current contract modes:
+
+- `FIXED`
+- `PERCENT_BALANCE`
+
+Supported percentage values for `PERCENT_BALANCE`:
+
+- 25%
+- 50%
+- 75%
+- 100%
+
+UI must never offer percentage values the contract rejects.
+
+For fixed mode, the UI must clearly indicate the asset/unit being sold (for example `$20 USDC` or a fixed B20 quantity) and must convert human units to token atomic units correctly.
+
+## 5.5 Risk controls
+
+Each policy/step can involve:
+
+- policy-level maximum deployed USDC;
+- vault-wide maximum deployed USDC;
+- per-step exact/percentage sell amount;
+- per-step maximum execution deviation (`maxDeviationBps`);
+- optional step expiry;
+- supported-asset allowlist;
+- exact sell/buy token pair;
+- one-time execution state.
+
+The frontend should make `MAX CAPITAL` and `MAX EXECUTION DEVIATION` understandable before activation.
+
+## 5.6 Lifecycle
+
+Primary lifecycle:
+
+`draft in UI → review → create/fund vault if needed → create policy → step 0 ACTIVE → worker monitors → condition true → worker obtains route → vault rechecks → trade succeeds → step EXECUTED → next step ACTIVE + reference captured → ... → policy COMPLETED`
+
+If execution fails or safety checks fail:
+
+- the active step remains active;
+- later steps remain queued;
+- the worker may retry later only when safe/idempotent;
+- confirmed execution must never be repeated.
+
+If the owner cancels:
+
+- policy becomes cancelled;
+- no later execution may occur;
+- owner retains withdrawal authority over vault assets.
+
+## 5.7 Expiry
+
+A step with `expiresAt != 0` must not execute after expiry.
+
+The UI must show expiry in human-readable form and should warn the user when a queued step’s expiry could occur before it ever becomes active.
+
+Do not silently auto-extend an expired user rule.
 
 ---
 
-## 4. Trading and price truth
+# 6. Core user journeys
 
-### Verified assets only
+## 6.1 First-time user
 
-Never identify a supported stock by ticker alone. Segue maintains a verified registry sourced from Base/Coinbase B20 information. Each supported asset must bind:
-- ticker/company metadata offchain;
-- exact B20 contract address;
-- token decimals;
-- exact Chainlink total-return feed;
-- feed decimals/staleness policy;
-- active/paused state.
+1. Land on Segue and understand the product before connecting.
+2. See that Segue is for eligible users and tokenized stocks on Base.
+3. Connect wallet.
+4. Switch/request Base network if necessary.
+5. Inspect supported stocks.
+6. Open a stock workspace.
+7. Build a sequence in plain trading language.
+8. Review the sequence path and risk limits.
+9. If no vault exists, create canonical vault.
+10. Configure/confirm executor and vault max deployed capital.
+11. Fund the vault with the required starting asset.
+12. Activate policy.
+13. See the active step, reference price, feed freshness, current condition state, and vault balances.
+14. Leave the app.
 
-Base USDC is the settlement asset.
+## 6.2 Returning user
 
-### B20 corporate actions
+1. Connect wallet.
+2. Discover canonical vault from factory.
+3. Reconstruct active/history state from chain/indexer.
+4. Show current active policy without requiring localStorage.
+5. Show most relevant live state first: current stock/condition, progress, funds, latest worker/evidence status.
+6. Allow cancel/pause/withdraw actions that the owner genuinely controls.
 
-B20 token/share representation can change through the B20 multiplier for splits/dividends. Segue therefore uses the official Chainlink **total-return feed** for trigger and valuation truth rather than a naive raw token/share assumption.
+## 6.3 Judge/demo user
 
-### Feed-hours limitation
+The judge should be able to understand without reading architecture docs:
 
-Coinbase B20 tokens can trade around the clock, but the configured Chainlink equity total-return feed may stop updating outside its own operating window. Segue must fail closed when that feed exceeds the configured staleness limit. Product copy should therefore distinguish **always-on monitoring/trading availability** from guaranteed trigger execution during stale-feed periods.
+- which stock is being watched;
+- what the condition is;
+- what trade will happen;
+- what happens after that trade;
+- how much capital is at risk;
+- why the worker cannot steal/rewrite the strategy;
+- whether the browser needs to stay open;
+- where the real onchain evidence is.
 
 ---
 
-## 5. Locked architecture
+# 7. Smart-contract architecture
 
 ```text
-Browser wallet
-  ↓ create/fund/configure
-StockPolicyVaultFactory
-  ↓
-User-owned StockPolicyVault
-  - holds that user's strategy assets
-  - stores policy + ordered step state
-  - uses AssetRegistry / Chainlink price truth
-  - rechecks condition at execution
-  - enforces assets, exact amount, expiry, caps and deviation
-  - advances only after execution postconditions pass
-  ↑
-  │ executeStep(policyId, routing calldata)
+User wallet
   │
-FastAPI automation worker
-  - dedicated gas-only executor wallet
-  - never owns user strategy funds
-  - reconciles onchain policies
-  - asks whether active step is executable
-  - obtains validated 1inch Classic Swap calldata only when needed
-  - submits execution and records evidence
-  ├─ Base RPC
-  ├─ 1inch Classic Swap API
-  └─ PostgreSQL index/cache
+  ├─ creates canonical vault through StockPolicyVaultFactory
+  ├─ funds vault
+  ├─ creates/cancels policy
+  └─ retains withdrawal + executor/pause/limit controls
+       │
+       ▼
+StockPolicyVaultFactory
+  ├─ one vault per wallet
+  ├─ immutable registry
+  ├─ immutable Base USDC settlement token
+  └─ immutable execution/allowance target
+       │
+       ▼
+User-owned StockPolicyVault
+  ├─ assets/funds
+  ├─ current/historical policies
+  ├─ ordered step state
+  ├─ Chainlink-backed condition recheck
+  ├─ exact amount + cap enforcement
+  ├─ min acceptable output calculation
+  ├─ one-time state transition
+  └─ next-step activation only after postconditions pass
+       ▲
+       │ executeStep(policyId, provider calldata)
+       │
+Automation executor / worker
 ```
 
-### Factory
+## 7.1 Factory requirements
 
 `StockPolicyVaultFactory`:
-- permissionless one-vault-per-wallet creation for MVP;
-- shared registry, settlement-token and fixed execution-target configuration;
+
+- permissionless canonical one-vault-per-wallet creation for MVP;
+- stores shared immutable registry, settlement token, and execution target;
 - emits `VaultCreated(owner, vault, executor, maxDeployedUSDC)`;
-- retains no policy or withdrawal authority over user vaults.
+- has no admin withdrawal or policy-authority path over user vaults.
 
-### Vault trust boundary
+## 7.2 Vault ownership model
 
-The worker may pay gas, request a quote, supply routing calldata and attempt the current rule. It may **not** withdraw funds, alter conditions/assets/amounts, increase caps, execute a completed step or cause a different token pair to be accepted.
+The vault owner is the user wallet that created it.
 
-The vault must independently:
-1. re-read active policy/step and condition;
-2. re-read verified Chainlink-backed price truth;
-3. resolve the exact stored sell amount;
-4. check policy/vault deployed-USDC caps;
-5. compute minimum acceptable output from verified prices + user `maxDeviationBps`;
-6. snapshot sell/buy balances;
-7. approve only the exact resolved sell amount to the factory's immutable execution target;
-8. execute worker-supplied routing calldata;
-9. reset allowance to zero where appropriate;
-10. require the exact stored sell amount was consumed;
-11. require intended buy-token balance increased by at least the minimum;
-12. only then mark the step executed and activate the next step.
+Owner powers currently include:
 
-Any failed postcondition reverts and leaves the sequence unadvanced.
+- set executor;
+- set vault max deployed USDC, subject to current deployed exposure;
+- pause/unpause;
+- deposit settlement asset;
+- withdraw assets;
+- create policy;
+- cancel policy;
+- execute their own step if desired because `executeStep` allows owner or executor.
 
-### Execution-provider boundary
+The automation worker is not the owner.
 
-The vault does not trust or depend on a quote API by name. It only knows one immutable execution contract address selected before deployment. The worker validates provider output and the vault independently validates the economic result.
+## 7.3 Worker trust boundary
 
-For the current M2 path, the execution target must be resolved from 1inch's live `approve/spender` endpoint and frozen into the factory. A later quote is accepted only if its `tx.to` still equals that same target.
+The worker may:
 
-### Source of truth
+- read chain state;
+- evaluate whether the contract says the step is executable;
+- call a routing provider;
+- supply routing calldata;
+- pay gas;
+- call `executeStep`;
+- record evidence.
 
-Blockchain state is authoritative for vault ownership, policy existence, active/queued/executed state, budgets, balances and execution events.
+The worker may **not**:
 
-PostgreSQL may store indexing cursors, friendly UI metadata, worker health, provider provenance and transaction evidence cache. LocalStorage/PostgreSQL must not determine whether a real onchain policy exists.
+- withdraw user funds;
+- alter the stored condition;
+- alter sell/buy assets;
+- increase amount/caps;
+- skip a step;
+- activate a queued step early;
+- mark a step completed without a successful trade;
+- force an output below the vault’s minimum;
+- execute an already completed/cancelled policy.
+
+## 7.4 Vault execution invariants
+
+Before accepting a trade, the vault must independently:
+
+1. require live policy / active step;
+2. reject paused/expired state;
+3. read fresh Chainlink-backed condition price;
+4. require the stored condition is true;
+5. resolve the exact stored sell amount;
+6. require sufficient balance;
+7. enforce policy/vault deployed-USDC caps;
+8. compute minimum acceptable buy output from verified price truth and `maxDeviationBps`;
+9. snapshot balances;
+10. set only the exact temporary sell allowance to the immutable execution target;
+11. execute worker-supplied calldata;
+12. reset allowance to zero;
+13. require the exact stored sell amount actually left the vault;
+14. require the intended buy-token balance increased by at least the minimum;
+15. update exposure accounting;
+16. only then mark the step `EXECUTED`;
+17. only then activate/capture reference for the next step or complete the policy.
+
+Any failure must revert the transaction so sequence state does not falsely advance.
+
+## 7.5 Exposure accounting
+
+When USDC is sold into B20 exposure:
+
+- increase policy deployed-USDC;
+- increase vault deployed-USDC;
+- enforce both caps before execution.
+
+When B20 is sold back to USDC:
+
+- reduce policy exposure up to that policy’s amount;
+- independently reduce vault-wide exposure up to the vault total;
+- preserve correct accounting even if a later policy sells B20 originating from a previous policy.
 
 ---
 
-## 6. Automation worker
+# 8. Price, slippage, and economic safety
 
-Locked runtime direction:
-- Python 3.12;
-- FastAPI;
-- SQLAlchemy/PostgreSQL;
-- Web3.py or minimal EVM client;
-- HTTPX for 1inch;
-- always-on worker process/service.
+## 8.1 Condition truth vs execution quote
 
-Target loop every ~20–30 seconds:
-1. discover/reconcile active vaults/steps;
-2. call onchain `previewExecution`/equivalent;
-3. if false, do nothing;
-4. if true, request a firm 1inch Classic Swap transaction;
-5. validate chain, `from`, `origin`, receiver, token pair, amount, execution target and freshness;
-6. submit `executeStep`;
-7. wait for receipt;
-8. persist tx/evidence;
-9. never retry a confirmed/completed step.
+Two different truths exist:
 
-On restart, reconcile against chain before action.
+- **Condition/valuation truth:** verified Chainlink total-return feeds.
+- **Executable route:** live 1inch Classic Swap response.
+
+A 1inch quote must never replace the oracle condition check.
+
+## 8.2 Minimum output
+
+The vault computes a Chainlink-derived expected cross-asset amount, scaled by token decimals, then applies the user’s `maxDeviationBps` to derive the minimum accepted output.
+
+The worker/provider cannot lower that minimum.
+
+## 8.3 Exact sell amount
+
+A step must not advance after a partial or smaller-than-stored sale. Current hardening requires `sold == resolved sellAmount`.
+
+## 8.4 Provider quote validation
+
+Before broadcasting, the worker must validate at least:
+
+- Base chain id;
+- expected sell token;
+- expected buy token;
+- exact sell amount;
+- quote/swap `from` semantics expected by current 1inch API;
+- executor/origin semantics expected by provider;
+- receiver is the Segue vault where required;
+- `tx.to` equals the deployment-frozen execution target;
+- native value is zero unless a future explicitly supported path requires otherwise;
+- calldata is present;
+- quote is current enough for safe execution;
+- no unsupported partial-fill behavior is enabled;
+- provider output does not require the executor to custody strategy funds.
+
+Provider schemas are research-open because APIs can evolve; the safety invariants are not.
 
 ---
 
-## 7. Frontend contract
+# 9. Execution provider boundary
 
-Stack:
-- Next.js + TypeScript + React;
-- Wagmi + Viem;
-- Base mainnet final production mode;
-- ERC-8021 Builder Code attribution from the transaction path onward.
+## 9.1 Current provider: 1inch Classic Swap
 
-Primary experience must read as a trading product:
+0x was the original route. A real Base-mainnet USDC→NVDAc request returned HTTP 422 `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE` due provider-side RWA/legal authorization. That is documented evidence, not a parameter bug.
+
+Segue therefore moved only the routing adapter to **1inch Classic Swap**.
+
+## 9.2 Immutable execution target
+
+Before factory deployment:
+
+1. query the live 1inch `approve/spender` endpoint;
+2. verify the returned public target;
+3. set it as `EXECUTION_TARGET_ADDRESS` locally;
+4. deploy the factory with that target frozen;
+5. later firm route responses are valid only if `tx.to` matches the frozen target.
+
+Do not deploy with an invented/default router address.
+
+## 9.3 Provider-switch rule
+
+Do not replace 1inch merely because another API is easier.
+
+A switch requires:
+
+- verified blocker evidence;
+- proof the replacement supports the required B20 production path;
+- preservation of the bounded vault architecture;
+- documented decision entry;
+- new real route verification before production claims.
+
+---
+
+# 10. Automation worker
+
+## 10.1 Locked runtime direction
+
+- Python 3.12
+- FastAPI
+- SQLAlchemy
+- PostgreSQL
+- Web3.py or a minimal maintained EVM client
+- HTTPX for provider calls
+- always-on worker/service
+
+Exact hosting provider is research-open.
+
+## 10.2 Worker loop
+
+Target cadence: approximately every 20–30 seconds unless provider/runtime constraints justify another reasonable interval.
+
+For each cycle:
+
+1. reconcile factory/vault/policy state from chain;
+2. determine the canonical active policy/step;
+3. call `previewExecution(policyId)`;
+4. if not executable, record/refresh reason and do not request a firm route unnecessarily;
+5. if executable, obtain firm 1inch transaction data;
+6. validate provider response against stored/previewed rule;
+7. submit `executeStep` from the dedicated executor wallet;
+8. wait for receipt or track it safely;
+9. re-read chain state after confirmation;
+10. persist transaction/evidence metadata;
+11. never retry a step already confirmed/executed;
+12. continue to the next policy only from chain truth.
+
+## 10.3 Restart behavior
+
+On process restart:
+
+- never trust “last attempted” local memory;
+- reconcile chain state before any action;
+- resume monitoring only active onchain steps;
+- treat stored database records as checkpoints/evidence, not authorization;
+- deduplicate transactions/events using deterministic identifiers such as vault + policyId + stepIndex + tx hash/block.
+
+## 10.4 Error handling
+
+At minimum distinguish:
+
+- condition false;
+- stale oracle/feed;
+- insufficient balance;
+- policy/vault cap;
+- expired step;
+- provider route unavailable;
+- provider response invalid;
+- RPC unavailable;
+- gas/funding issue for executor;
+- reverted vault execution;
+- already executed due race/reconciliation;
+- unsupported/paused asset.
+
+Do not turn an unknown/provider outage into “condition false” or “safe.”
+
+## 10.5 Secrets
+
+Server-only/protected:
+
+- `EXECUTOR_PRIVATE_KEY`
+- `ONEINCH_API_KEY`
+- private RPC credentials if used
+- `DATABASE_URL`
+- deployment credentials
+
+Never place these in frontend bundles, commits, docs, screenshots, logs, or chat output.
+
+---
+
+# 11. Persistence and indexing
+
+PostgreSQL is required for restart-safe indexing/history and UX, but the chain remains authoritative.
+
+The exact schema may evolve during implementation. It should be sufficient to represent the following conceptual records.
+
+## 11.1 Vault index
+
+Suggested fields:
+
+- chain_id
+- owner_address
+- vault_address
+- factory_address
+- executor_address
+- discovered_block
+- last_reconciled_block
+- paused
+- vault_max_deployed_usdc
+- vault_deployed_usdc
+
+## 11.2 Policy index
+
+Suggested fields:
+
+- vault_address
+- policy_id
+- status
+- created_at / created_block
+- current_step
+- step_count
+- policy_max_deployed_usdc
+- deployed_usdc
+- last_reconciled_block
+
+## 11.3 Step index
+
+Suggested fields:
+
+- vault_address
+- policy_id
+- step_index
+- status
+- condition asset/type/threshold/delta
+- reference price
+- sell token
+- buy token
+- amount mode/value
+- max deviation
+- expiry
+- activated block/time
+- executed block/time
+- execution tx hash
+
+## 11.4 Worker/evidence records
+
+Suggested fields:
+
+- deterministic work key
+- preview reason/result
+- observed price/update time
+- quote provider
+- provider request/response provenance excluding secrets
+- route target
+- attempted tx hash
+- receipt status
+- sold/bought/min output
+- block number
+- error category
+- timestamps
+
+Do not persist private keys or raw secret-bearing provider headers.
+
+---
+
+# 12. Backend/API contract
+
+The final frontend may read some chain state directly with Viem/Wagmi and use the backend for indexed metadata/history/worker health.
+
+Do not force an unnecessary centralized mutation API for actions the user should sign directly.
+
+A practical backend should expose enough to support:
+
+- supported curated asset metadata + provenance/freshness context;
+- wallet/vault lookup;
+- policy/history/indexed evidence lookup;
+- worker status for active policy;
+- execution evidence;
+- health/readiness.
+
+Exact REST route names are implementation details. Freeze them once the backend is stable so frontend work does not chase moving contracts.
+
+Any API response that mirrors chain state should include enough identifiers to reconcile it to chain (chain id, vault, policy id, block/tx where relevant).
+
+---
+
+# 13. Frontend product contract
+
+## 13.1 Stack
+
+- Next.js
+- TypeScript
+- React
+- Wagmi
+- Viem
+- Base mainnet final production mode
+- ERC-8021 Builder Code attribution on supported transaction paths
+
+## 13.2 Information architecture
+
+Minimum meaningful surfaces:
+
+1. **Landing / product explanation**
+2. **Stock catalogue / discovery**
+3. **Stock detail + sequence builder**
+4. **Review / risk confirmation**
+5. **Vault setup / funding state**
+6. **Active Sequence workspace**
+7. **History / evidence**
+8. **Owner controls** — cancel, pause, withdraw where applicable
+
+These may be routes, panels, or a unified workspace; exact composition is a design decision.
+
+## 13.3 Stock catalogue
+
+Each supported asset card/row should communicate useful real information, not decorative fake metrics.
+
+Potential fields after provider research:
+
+- company name;
+- B20 ticker;
+- current/last verified price context;
+- feed freshness / status;
+- simple real chart context where available;
+- availability/support status.
+
+Never label an underlying-equity chart as the exact B20 execution price if it is not.
+
+## 13.4 Sequence builder
+
+The primary builder should read like a trading rule, not a form schema.
+
+Target visual grammar:
 
 ```text
-NVDAc — NVIDIA
-real price/chart context
-
 WHEN
-[stock] [falls/rises/reaches] [condition]
+[NVDAc] [falls] [5% from activation price]
 
 DO
-[buy/sell/rotate] [$ / %]
+[Buy] [$20] [NVDAc]
 
 THEN
-[next condition + action]
+[when NVDAc rises 8% from the new reference]
+[Sell] [50%]
 
-MAX CAPITAL [$...]
-MAX EXECUTION DEVIATION [...%]
+THEN
+[...]
 
-[Review] [Activate]
+MAX CAPITAL        [$50]
+MAX DEVIATION      [5%]
+EXPIRY             [optional]
 ```
 
-Show the sequence path visually, e.g.:
+The UI must make dependencies obvious: step 2 is not simultaneously live with step 1.
 
-`NVDAc condition → Buy → +8% → Sell 50% → AAPLc condition → Buy`
+Show a compact sequence path such as:
 
-Use only real chart/market data. If an underlying-equity chart is used, label it as underlying-stock context; actual automation truth remains the B20 Chainlink total-return feed and actual execution quote.
+`NVDAc -5% → Buy $20 → +8% from new reference → Sell 50% → ...`
 
-User flow:
+## 13.5 Review screen
 
-`connect → inspect stock → build sequence → review risk → create/fund vault if needed → activate → live`
+Before activation, summarize:
 
-Infrastructure jargon must not lead the experience.
+- every condition/action in human language;
+- exact starting asset/funding requirement;
+- maximum capital;
+- maximum execution deviation;
+- expiries;
+- user vault address if known;
+- that the automation executor cannot withdraw or rewrite the rule;
+- that execution depends on fresh verified feeds and available routes;
+- jurisdiction/eligibility acknowledgement.
 
----
+## 13.6 Active workspace
 
-## 8. Integration ledger
+Must show real state:
 
-The detailed live ledger is `docs/INTEGRATIONS.md`.
+- policy status;
+- active step number / total steps;
+- active condition;
+- reference price where relevant;
+- latest verified price and freshness;
+- current preview status/reason;
+- vault balances;
+- next queued step(s);
+- past executed steps + tx links;
+- worker/evidence status without pretending an offchain attempt is a confirmed trade.
 
-Required:
-- Base mainnet;
-- official Coinbase B20 assets;
-- official Chainlink total-return feeds;
-- 1inch Classic Swap API / live supported execution target;
-- Base RPC;
-- ERC-8021/Base Builder Code;
-- PostgreSQL;
-- a real chart source for polished frontend context.
+## 13.7 Empty/loading/error states
 
-Not required:
-- 0x after the verified provider-side RWA authorization blocker;
-- AI provider;
-- Telegram/Telegraph;
-- Firestore/Vertex;
-- Chainlink Automation.
+Required deliberate states include:
 
-### Credential state during M2
+- wallet disconnected;
+- wrong network;
+- no vault yet;
+- vault exists but unfunded;
+- no active policy;
+- stale feed;
+- route temporarily unavailable;
+- worker unavailable but chain state still readable;
+- insufficient executor gas (operator-facing, not necessarily user-facing);
+- policy expired;
+- cancelled/completed policy;
+- unsupported/paused asset.
 
-- `EXECUTOR_PRIVATE_KEY`: obtained by builder; secret, never commit/paste.
-- `EXECUTOR_ADDRESS`: configured; first real preflight showed zero Base ETH, so a small gas balance is still required before deployment.
-- `BASE_RPC_URL`: configured locally; M2 may use any Base mainnet RPC that passes the required read calls.
-- `ONEINCH_API_KEY`: required next for live route verification; secret, never commit/paste.
-- `EXECUTION_TARGET_ADDRESS`: public; set only from the live 1inch `approve/spender` response before deployment.
-- `BASE_BUILDER_CODE`: Base app setup started; domain verification waits for deployed Segue URL.
-- `DATABASE_URL`: later worker/persistence milestone.
+## 13.8 Visual direction
 
----
+The product should feel like a premium modern trading interface, not a generic AI dashboard.
 
-## 9. Blockers / gates B1–B12
+Priorities:
 
-These are completion gates, not reasons to silently redesign.
+- stock/condition/action hierarchy;
+- clean sequence visualization;
+- clear risk limits;
+- strong state transitions;
+- restrained technical detail;
+- real evidence links.
 
-### B1 — Real B20 route exists
-1inch returns a firm executable Base mainnet transaction for at least one official Coinbase B20 ↔ USDC pair with the Segue vault as `from`/receiver, the executor EOA as `origin`, and the transaction target equal to the factory's frozen execution target.
-
-### B2 — Real B20 buy
-A deployed Segue vault completes a real Base mainnet USDC → B20 purchase through the production path and receives the B20 output.
-
-### B3 — Real B20 sell
-The same vault can sell all/part of a B20 balance back to USDC through the same bounded path.
-
-### B4 — Real Chainlink condition
-The deployed contract reads the exact official total-return feed and rejects a false condition / accepts a true condition while failing safely on stale data.
-
-### B5 — Browser-closed automation
-A deployed worker advances an ACTIVE policy without the frontend open.
-
-### B6 — Real chaining
-Step 2 cannot execute before step 1; after successful step 1, step 2 becomes ACTIVE with the expected new reference.
-
-### B7 — Worker cannot escape limits
-Tests and real-path checks cover wrong token, wrong/excess/partial sell amount, stale/completed step, unsafe price deviation and unauthorized withdrawal.
-
-### B8 — Multi-user isolation
-Two wallets resolve to different vaults and cannot alter/withdraw from each other's vaults.
-
-### B9 — Onchain recovery
-After clearing browser state, active/completed policies reconstruct from chain/indexed evidence rather than localStorage.
-
-### B10 — Builder Code attribution
-At least one showcased Base transaction contains valid project ERC-8021 attribution.
-
-### B11 — Public production flow
-Judge can open the live URL, connect an eligible wallet, inspect real stock data, build/review a policy and reach activation without dead controls.
-
-### B12 — Submission proof
-Public demo video, X post tagging `@buildonbase`, live URL, Builder Code and official form are complete before deadline.
-
-**Segue is not submission-ready until B1–B12 pass or a requirement is explicitly amended with new verified evidence.**
+When frontend work begins, the coding agent should research/reference strong contemporary trading/automation interfaces and may propose visual implementation details. Do not change the product flow to mimic a reference.
 
 ---
 
-## 10. Milestone plan and current status
+# 14. Eligibility and compliance UX
 
-Every milestone ends with: verify → commit/push → reconcile PRD/integration ledger → report exact evidence → only then continue.
+Coinbase B20 access is jurisdiction-sensitive. The product must not knowingly enable restricted U.S. users to trade the B20 product.
 
-| Milestone | Status | Commit | Evidence |
-|---|---|---|---|
-| M0 Repo/source of truth | **COMPLETE** | `ac2cba1c7e309a35244816c36e781471600275fe` | Source-of-truth baseline + secret-safe CI green |
-| M1 Contract state machine | **COMPLETE** | `615b1908856670601e2d9ae05fc1d4ec52cc66f8` | Foundry build green; 24 tests passed, 0 failed; vault/factory/registry implemented + hardened |
-| M2 Real Base mainnet buy/sell | **IN PROGRESS** | current `main` | Base/NVDAc/feeds reached; 0x provider blocker proven; 1inch adapter implemented; live 1inch route + deployment/buy/sell remain |
-| M3 Autonomous worker | NOT STARTED | — | Must pass B5–B6 with deployed service |
-| M4 Persistence/history/multi-user | NOT STARTED | — | Must pass B7–B9 |
-| M5 Trading frontend | NOT STARTED | — | Deployed browser flow against real backend/contracts |
-| M6 Production evidence | NOT STARTED | — | Must pass B10–B11 |
-| M7 Submission | NOT STARTED | — | Must pass B12; freeze exact final commit |
+For the hackathon frontend:
 
-### M0 — Repository + source of truth
+- clearly disclose that tokenized-stock availability is restricted by jurisdiction;
+- include an eligibility acknowledgement before activation/trading actions;
+- link to the relevant official product/eligibility information where appropriate;
+- do not write copy implying universal availability;
+- do not implement a fake compliance bypass;
+- if the external provider blocks an asset/jurisdiction, treat that as a real restriction rather than an error to circumvent.
 
-Required: PRD, build rules, AGENTS.md, environment example, architecture/integration docs, asset-registry schema and CI baseline. **Complete.**
+The agent may research the exact current wording/requirements from official Coinbase/Base materials before final UI copy.
 
-### M1 — Contract state machine
+---
 
-Required: factory, per-user vault, policy/step state, deterministic conditions, caps, pause/cancel/withdraw, Chainlink checking boundary, ordered activation, bounded fixed execution-target boundary and contract tests. **Complete locally.**
+# 15. Base Builder Code / attribution
 
-M1 evidence:
-- Solidity 0.8.24 / Foundry 1.8.1 build succeeded via IR;
-- 24 tests passed, 0 failed, 0 skipped on GitHub Actions;
-- covered ordered activation, reference capture, true/false relative conditions, stale feed rejection, caps, pause/cancel, unauthorized withdrawal, exact one-time execution, unsafe output reversion, executor overspend, partial-sell prevention, multi-user factory isolation and cross-policy vault exposure release;
-- no mainnet trade/provider success is claimed by M1.
+ERC-8021/Base Builder Code attribution is required for the submission/evidence path.
 
-### M2 — Real Base mainnet buy + sell
+Requirements:
+
+- research the current official integration method before implementation;
+- add attribution to supported Segue-originated transactions where required;
+- do not alter contract semantics just to add attribution if the standard supports transaction-level tagging;
+- verify at least one showcased Base transaction carries valid project attribution;
+- record the evidence transaction and Builder Code in submission docs.
+
+The exact current SDK/API wiring is research-open; B10 is not.
+
+---
+
+# 16. Integration ledger
+
+The live detailed ledger is `docs/INTEGRATIONS.md` and must be reconciled as work progresses.
+
+Required integrations:
+
+- Base mainnet
+- official Coinbase B20 assets
+- official Chainlink total-return feeds
+- 1inch Classic Swap / current supported execution target
+- Base RPC
+- PostgreSQL
+- FastAPI worker
+- real chart/market context source for frontend
+- ERC-8021/Base Builder Code
+
+Explicitly not required for core MVP:
+
+- 0x (superseded after verified RWA blocker)
+- AI provider
+- Telegram/Telegraph
+- Firestore/Vertex
+- Chainlink Automation
+
+---
+
+# 17. Current credential / local-operator boundary
+
+The coding agent must not request that secrets be pasted into chat or committed.
+
+Current M2 environment names:
+
+- `BASE_RPC_URL`
+- `EXECUTOR_PRIVATE_KEY`
+- `EXECUTOR_ADDRESS`
+- `DEMO_OWNER_PRIVATE_KEY`
+- `DEMO_OWNER_ADDRESS`
+- `ONEINCH_API_KEY`
+- `EXECUTION_TARGET_ADDRESS`
+- `ASSET_REGISTRY_ADDRESS`
+- `FACTORY_ADDRESS`
+- `DEMO_VAULT_ADDRESS`
+- `DATABASE_URL`
+- `BASE_BUILDER_CODE`
+
+The human builder performs secret/funding/signature steps locally when necessary. The coding agent should prepare exact commands/scripts, validate non-secret output, and stop at the secret boundary rather than inventing credentials.
+
+Use deliberately tiny mainnet amounts for proof.
+
+---
+
+# 18. Failure and safety matrix
+
+| Failure | Required behavior |
+|---|---|
+| Chainlink feed stale | No trade; surface stale-data reason |
+| Condition false | No route request if avoidable; remain ACTIVE |
+| Insufficient vault sell balance | No trade; remain ACTIVE |
+| Policy/vault capital cap exceeded | No trade |
+| Step expired | No trade; surface expired state |
+| 1inch route unavailable | No trade; retry later safely |
+| Provider target mismatches frozen target | Reject route |
+| Provider returns wrong pair/amount/receiver | Reject route |
+| Vault output below minimum | Revert; do not advance |
+| Less than exact fixed/resolved sell amount consumed | Revert; do not advance |
+| Worker submits duplicate after confirmed execution | Chain state/idempotency prevents second execution |
+| Worker restarts | Reconcile chain before action |
+| DB unavailable | Do not fabricate state; chain remains authority; degrade history/indexing gracefully |
+| RPC unavailable | No trade; retry after recovery |
+| Executor gas empty | No trade; operator alert/status; user funds remain safe |
+| User cancels policy | Remaining steps cannot execute |
+| User pauses vault | Worker cannot execute |
+| Unsupported/paused asset | Policy creation/execution rejected as appropriate |
+
+---
+
+# 19. Observability and proof
+
+For every real production-path execution, capture enough evidence to answer:
+
+- which exact git commit was deployed/executed;
+- which chain and block;
+- which user/vault;
+- which policy/step;
+- what the stored condition was;
+- what oracle price/reference made it executable;
+- what asset/amount was sold;
+- what asset/amount was received;
+- what minimum output the vault required;
+- which transaction hash proved it;
+- what state the policy moved to afterward.
+
+Do not rely only on worker logs. Prefer transaction receipts, emitted events, contract reads, balance snapshots, and explorer links.
+
+M2 already includes deterministic snapshot/condition tooling for this purpose.
+
+---
+
+# 20. Testing strategy
+
+## 20.1 Contract tests
+
+Must cover at least:
+
+- supported/unsupported assets;
+- price normalization;
+- invalid/incomplete/stale feed rejection;
+- one-vault-per-wallet factory isolation;
+- owner/executor authorization;
+- policy creation constraints;
+- exactly one active policy per vault;
+- step ordering;
+- reference capture timing;
+- all condition types;
+- fixed amount;
+- 25/50/75/100% balance amount modes;
+- expiry;
+- pause/cancel;
+- policy/vault caps;
+- exact-sell enforcement;
+- unsafe output rejection;
+- temporary allowance reset;
+- completed-step one-time execution;
+- multi-user/cross-vault isolation;
+- cross-policy vault exposure accounting.
+
+M1’s locked contract milestone has already passed 24 Foundry tests. Do not rewrite the tested contract architecture casually.
+
+## 20.2 Provider adapter tests
+
+Use fixtures/mocks for parsing/validation, but also perform real provider verification when credentials are available.
+
+Test:
+
+- expected 1inch response parsing;
+- malformed response;
+- wrong target;
+- wrong pair;
+- wrong amount;
+- wrong receiver/origin/from semantics;
+- missing calldata;
+- nonzero native value where unsupported;
+- stale/invalid route data where detectable.
+
+## 20.3 Worker tests
+
+Test:
+
+- preview false → no execution;
+- preview ready → firm route + execution path;
+- duplicate cycles/idempotency;
+- restart reconciliation;
+- receipt success/failure;
+- RPC/provider transient failures;
+- completed policy is not retried;
+- two-step chaining state changes;
+- database checkpoint recovery.
+
+## 20.4 Backend/frontend integration
+
+Test real API/state shapes. Avoid a separate fake frontend data model.
+
+## 20.5 Browser verification
+
+Before submission verify at least:
+
+- connect/wrong-network behavior;
+- stock selection;
+- sequence construction;
+- review;
+- canonical vault lookup/creation;
+- funding/activation path;
+- active state after reload;
+- history/evidence;
+- cancel/withdraw controls;
+- mobile usability;
+- public URL accessibility;
+- no dead buttons;
+- no fake hardcoded stock/tx state.
+
+## 20.6 Regression rule
+
+Any real mainnet/browser bug that can be reproduced reasonably should receive a regression test.
+
+---
+
+# 21. Completion gates B1–B12
+
+These gates are binding evidence requirements, not suggestions.
+
+## B1 — Real B20 route exists
+
+1inch returns a firm executable Base-mainnet transaction for at least one official Coinbase B20 ↔ USDC pair, using the deployed Segue vault/executor semantics and the factory’s frozen execution target.
+
+## B2 — Real B20 buy
+
+A deployed Segue vault completes a real Base-mainnet USDC → official B20 purchase through the production path and receives the B20 output.
+
+## B3 — Real B20 sell
+
+The same bounded path sells all/part of a B20 balance back to USDC.
+
+## B4 — Real Chainlink condition
+
+The deployed contract reads the exact official total-return feed, accepts a true condition, rejects a false condition, and fails safely on stale data.
+
+## B5 — Browser-closed automation
+
+A deployed worker advances an ACTIVE policy while the frontend is not open.
+
+## B6 — Real chaining
+
+Step 2 cannot execute before step 1. After successful step 1, step 2 becomes ACTIVE with the expected new reference price and can later execute.
+
+## B7 — Worker cannot escape limits
+
+Tests and real-path evidence cover wrong token, wrong/excess/partial sell, stale/completed step, unsafe output/deviation, and unauthorized withdrawal boundaries.
+
+## B8 — Multi-user isolation
+
+Two wallets resolve to different canonical vaults and cannot alter/withdraw from each other’s vaults.
+
+## B9 — Onchain recovery
+
+After browser/local cache state is cleared, active/completed policies reconstruct from chain/indexed evidence.
+
+## B10 — Builder Code attribution
+
+At least one showcased Base transaction contains valid Segue ERC-8021/Base Builder Code attribution.
+
+## B11 — Public production flow
+
+A judge can open the public URL, connect an eligible wallet, inspect real market context, build/review a sequence, and reach the real activation path without dead controls.
+
+## B12 — Submission proof
+
+Public demo video, X post tagging `@buildonbase`, live project URL, Builder Code, submission tweet URL, and official form are complete before the official deadline.
+
+**Segue is not submission-ready until B1–B12 pass or a requirement is explicitly amended by documented new evidence.**
+
+---
+
+# 22. Milestone plan and current state
+
+Every milestone ends with:
+
+`inspect → implement → test → real verification where required → reconcile PRD/integration ledger → commit → push → report exact SHA`
+
+| Milestone | Status | Evidence / stop condition |
+|---|---|---|
+| M0 Repo/source of truth | **COMPLETE** | PRD/build rules/agent instructions/docs/env/CI baseline |
+| M1 Contract state machine | **COMPLETE** | `615b1908856670601e2d9ae05fc1d4ec52cc66f8`; Foundry build + 24 tests |
+| M2 Real Base-mainnet buy/sell | **IN PROGRESS — tooling prepared** | Current HEAD includes route/deploy/vault/policy/condition/snapshot tooling; B1–B4 still require real local provider/mainnet evidence |
+| M3 Autonomous worker | NOT STARTED | Deployed/restart-safe worker; B5–B6 |
+| M4 Persistence/history/multi-user | NOT STARTED | PostgreSQL + recovery/isolation; B7–B9 |
+| M5 Trading frontend | NOT STARTED | Real data/browser flow |
+| M6 Production deployment/evidence | NOT STARTED | public frontend/worker + Builder Code + B10–B11 |
+| M7 Submission | NOT STARTED | B12 + final docs/demo/freeze |
+
+## 22.1 M2 current exact handoff state
+
+Current repository HEAD before this PRD revision was `414916b539f2d360c0caefa43e729e8e6de940e7`.
+
+Since the initial 1inch provider switch, the repo added/hardened:
+
+- deployment and read-only verification scripts;
+- separate demo-owner vs gas-only executor roles;
+- canonical demo vault creation/funding path;
+- real two-step M2 round-trip policy creation;
+- firm buy/sell quote validation;
+- bounded `executeStep` broadcast path where executor calls the vault, not 1inch directly;
+- deterministic before/after balance + policy + block + git-SHA snapshots;
+- true-condition and deliberately-false-condition evidence probes;
+- artifact verification and regression tests;
+- secret-scanning hardening.
+
+M2 is **not complete** until B1–B4 have real evidence.
+
+The immediate human-only dependencies may include:
+
+- a valid `ONEINCH_API_KEY` stored locally;
+- current live execution target resolved from 1inch;
+- deliberately small Base ETH balances for required gas wallets;
+- deliberately small demo-owner USDC for the proof trade;
+- a fresh enough NVDA total-return feed for the condition proof.
+
+Follow `docs/M2_MAINNET.md` rather than inventing a new M2 flow.
+
+## 22.2 M3 autonomous worker
 
 Required outcome:
-- verify exact official Base USDC, chosen Coinbase B20 token and total-return feed;
-- verify current live 1inch execution target and executable B20 route;
-- deploy the exact tested contracts with that target frozen into the factory;
-- create/fund one tiny demo vault;
-- obtain production 1inch swap calldata for the vault;
-- execute real B20 buy;
-- execute real B20 sell;
-- record tx hashes and before/after balances;
-- pass B1–B4.
 
-Current verified state:
-- Base chain id 8453 reached;
-- configured USDC/NVDAc contracts and both Chainlink feeds returned real onchain data;
-- 0x USDC→NVDAc returned HTTP 422 `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE`;
-- 1inch adapter/preflight/firm-quote code implemented;
-- contract CI remains green after deployment-script change;
-- live 1inch route is not yet claimed because a Segue `ONEINCH_API_KEY` has not yet been exercised;
-- executor currently needs Base ETH gas;
-- equity-feed freshness may block B4 outside its update window.
+A deployed always-on worker can discover/reconcile the active policy, wait until the contract reports it ready, obtain/validate a route, execute the exact step, survive restart, and advance a later step without the browser.
 
-**Do not begin the main frontend redesign before M2 passes.**
+Stop condition: B5–B6 with real deployed evidence.
 
-### M3 — Autonomous worker
+## 22.3 M4 persistence/history/multi-user
 
-Build/deploy the reconciliation + quote + execution loop with restart-safe idempotency. Pass B5–B6.
+Required outcome:
 
-### M4 — Persistence/history/multi-user
+- PostgreSQL-backed indexing/checkpoints;
+- restart-safe reconciliation;
+- queryable execution history/evidence;
+- two-wallet isolation demonstration;
+- recovery after browser/localStorage clearing.
 
-PostgreSQL checkpoints/evidence, two-wallet isolation and chain-backed recovery. Pass B7–B9.
+Stop condition: B7–B9.
 
-### M5 — Trading frontend
+## 22.4 M5 frontend
 
-Wallet connect, stock list, real price/chart context, structured builder, review/risk, JIT vault creation/funding, activation, live/history, cancel/withdraw.
+Required outcome:
 
-### M6 — Deployment + final evidence
+The product is understandable and usable as a real stock automation product against the actual contracts/backend/data.
 
-Production frontend/worker, exact contract addresses, Builder Code attribution and one complete autonomous sequence. Pass B10–B11.
+Stop condition: full browser journey works against real deployed services without mocks or dead controls.
 
-### M7 — Submission
+## 22.5 M6 production/evidence
 
-README truth audit, under-3-minute demo, X post, live URL, Builder Code and form. Pass B12 and freeze final SHA.
+Required outcome:
 
----
+- production worker;
+- production/public frontend;
+- exact contract addresses documented;
+- Builder Code attribution proven;
+- at least one complete unattended sequence evidence bundle;
+- mobile/desktop browser verification.
 
-## 11. Architecture decisions / hardening ledger
+Stop condition: B10–B11.
 
-### 2026-09-05 — Exact executor spend
+## 22.6 M7 submission
 
-The executor may choose route calldata but may not cause a fixed step to advance after selling less than the stored resolved amount. Vault execution requires `sold == sellAmount` in addition to the minimum-output postcondition.
+Required outcome:
 
-### 2026-09-05 — Cross-policy vault exposure
+- README/docs truth audit;
+- concise demo video;
+- X post;
+- public URL;
+- Builder Code;
+- official form;
+- exact final SHA frozen.
 
-A later policy selling B20 acquired by a previous completed policy must release vault-wide deployed-USDC exposure even when the new policy's local deployed amount began at zero. Policy-local and vault-wide reductions are therefore bounded independently.
-
-### 2026-09-05 — Quote-math precision
-
-Minimum-buy computation scales by token-decimal difference before the principal division to avoid unnecessary precision loss between 6-decimal USDC and B20 assets. Final minimum output remains conservatively rounded down.
-
-### 2026-09-05 — M2 routing provider changed from 0x to 1inch
-
-Verified evidence forced this change rather than preference:
-
-1. The real Segue preflight reached Base mainnet, official NVDAc and the configured Chainlink feeds successfully.
-2. The live 0x request for USDC → NVDAc then returned HTTP 422 `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE`, with the provider stating the buy token was not authorized due to legal restrictions.
-3. Base publicly lists 1inch as a Coinbase Tokenized Stocks venue, and 1inch publicly documents support for Coinbase B20 stocks on Base including NVDAc.
-4. Segue therefore replaces only the offchain routing adapter. The Coinbase B20 asset, Base chain, Chainlink truth, per-user vaults, hard limits, fixed execution-target boundary and product thesis stay unchanged.
-5. The 1inch replacement remains **adapter implemented, not real-provider verified** until the dedicated Segue API key produces a live route.
-
-Do not bypass 0x's provider restriction and do not weaken the vault to accommodate a router.
+Stop condition: B12.
 
 ---
 
-## 12. Demo path
+# 23. Codex / coding-agent execution protocol
 
-Target under 3 minutes:
-1. open a real Coinbase B20 stock with real price/chart context;
-2. build a tiny real-capital sequence;
-3. show the sequence path and hard limits;
-4. activate/fund once;
-5. explain the worker cannot change rules or withdraw;
-6. leave/close the app;
-7. show real autonomous evidence: condition true → contract recheck → 1inch route → Base transaction → next step activated;
-8. reopen and show the same state recovered from chain;
-9. open block explorer evidence including Builder Code attribution.
+When handing this repository to Codex or another coding agent, the agent must begin by reading:
 
-Never present a mocked/simulated trade as the real autonomous path.
+1. `AGENTS.md`
+2. `BUILD_RULES.md`
+3. `PRD.md`
+4. `docs/INTEGRATIONS.md`
+5. the current milestone doc (currently `docs/M2_MAINNET.md`)
+6. recent commits and current repository tree
+
+Then it must state, before changing code:
+
+- current HEAD;
+- what is already implemented;
+- what is only locally tested;
+- what requires real external/mainnet proof;
+- current milestone;
+- exact next stop condition;
+- any credential/funding action that only the human builder can perform.
+
+The agent has freedom to research and choose routine implementation details **inside** the locked product architecture.
+
+It should not ask the user to make decisions that can be resolved through official documentation, repo inspection, tests, or safe provider research.
+
+It must stop/ask before:
+
+- replacing a locked provider/chain/oracle architecture;
+- weakening user-owned vault authority/safety;
+- cutting dependent sequencing;
+- switching a required real path to simulation;
+- making a destructive production change;
+- inventing unsupported market data or addresses.
+
+At the end of each milestone report compactly:
+
+**FINAL GITHUB HEAD**  
+**IMPLEMENTED**  
+**TESTS**  
+**REAL PROVIDER / MAINNET EVIDENCE**  
+**DEPLOYMENT**  
+**PERSISTENCE / LOG EVIDENCE**  
+**FRONTEND / BROWSER VERIFICATION**  
+**BLOCKERS**  
+**MILESTONE READY: YES/NO**
+
+A report is not proof; the reviewer should inspect the diff/evidence before accepting it.
 
 ---
 
-## 13. Submission requirements
+# 24. Demo path
 
-Current quest requirements tracked for closure:
-- project helps people trade/use Coinbase Tokenized Stocks on Base;
-- do not enable U.S. users to trade the restricted stock product;
-- public Loom/demo video;
+Target demo: approximately 2–3 minutes unless official rules specify otherwise.
+
+Suggested flow:
+
+1. Open Segue and show a real supported B20 stock with real market context.
+2. Build a small dependent sequence in plain language.
+3. Show the visual path and hard limits.
+4. Review and activate/fund once.
+5. Explain in one sentence that the user vault owns funds/rules and the worker only attempts the stored action.
+6. Leave/close the frontend.
+7. Show real autonomous evidence: condition becomes ready → worker attempts → vault rechecks → 1inch-routed Base transaction succeeds → next step becomes active.
+8. Show the later dependent step/evidence if available.
+9. Reopen the app and show the same state recovered from chain/indexer.
+10. Open explorer/evidence and Builder Code attribution.
+
+Never present a mocked/simulated transaction as the autonomous production proof.
+
+---
+
+# 25. Submission requirements
+
+Track and reverify the current official quest requirements before final submission.
+
+Current requirements already being tracked include:
+
+- project materially helps people trade/use Coinbase Tokenized Stocks on Base;
+- restricted users/jurisdictions are handled appropriately;
+- public demo video;
 - X post tagging `@buildonbase`;
 - live project URL;
 - Base Builder Code;
 - submission tweet URL;
-- official form before Sep 9, 2026, 11:59 PM EST.
+- official form before the official deadline.
 
-Prize pool tracked: $2,000 top project; remaining $3,000 split across five finalists. No weighted public judging rubric is currently published.
+Do not rely on an old third-party deadline/rubric if an official current page contradicts it.
 
 ---
 
-## 14. Final definition of done
+# 26. Architecture / hardening decision ledger
 
-The product is complete only when:
-- [x] repository/source-of-truth baseline exists and CI is green;
+## 2026-09-05 — Exact executor spend
+
+The executor may choose route calldata but may not cause a fixed/resolved step to advance after selling less than the stored amount. Vault execution requires exact sell consumption in addition to minimum-output postconditions.
+
+## 2026-09-05 — Cross-policy vault exposure
+
+A later policy selling B20 acquired by a previous completed policy must reduce vault-wide deployed-USDC exposure even when the new policy’s local exposure began at zero. Policy-local and vault-wide reductions are bounded independently.
+
+## 2026-09-05 — Quote-math precision
+
+Minimum-buy computation scales by token-decimal difference before principal division to preserve useful precision between 6-decimal USDC and B20 assets.
+
+## 2026-09-05 — Routing provider changed from 0x to 1inch
+
+Verified evidence forced this change:
+
+1. Base mainnet, official NVDAc, and configured Chainlink feeds were reachable.
+2. The live 0x USDC→NVDAc request returned `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE` due provider legal/RWA authorization.
+3. 1inch publicly supports Coinbase B20 stocks on Base.
+4. Only the routing adapter changed; Base/B20/Chainlink/vault/sequence thesis stayed intact.
+5. 1inch still requires real Segue provider/mainnet verification before B1–B3 are claimed.
+
+## 2026-09-06 — Separate demo owner and executor roles
+
+M2 tooling separates the user/demo-owner wallet from the gas-only executor. Do not collapse them merely to simplify proof: the product claim depends on demonstrating that the worker can execute without owning the strategy funds.
+
+## 2026-09-06 — Deterministic M2 evidence snapshots
+
+M2 records block number, git SHA, owner/executor, policy/current-step state, deployed-cap state, and vault USDC/B20 balances before/after real actions so mainnet completion is evidence-based rather than narrative.
+
+---
+
+# 27. Final definition of done
+
+Segue is complete for submission only when all required items are true:
+
+- [x] repository/source-of-truth baseline exists;
+- [x] build rules and agent instructions exist;
 - [x] bounded contract state machine is locally verified;
+- [x] M2 real-path scripts/evidence tooling are prepared;
+- [ ] current 1inch B20 firm route is live-verified;
 - [ ] contracts are deployed to Base mainnet;
-- [ ] official B20 addresses and feeds are verified in the deployed registry;
-- [ ] one real B20 buy succeeds;
-- [ ] one real B20 sell succeeds;
-- [ ] multi-step policy advances in the correct real order;
-- [ ] browser can be closed while worker executes a real step;
-- [ ] hard spending/deviation limits are proven on real path;
-- [ ] second wallet is isolated;
+- [ ] deployed registry contains verified official assets/feeds;
+- [ ] real USDC → B20 buy succeeds through the Segue vault;
+- [ ] real B20 → USDC sell succeeds through the same bounded path;
+- [ ] real true/false/stale Chainlink behavior is captured;
+- [ ] autonomous worker is deployed;
+- [ ] browser can be closed while a real step executes;
+- [ ] real dependent step 2 activates only after step 1;
+- [ ] PostgreSQL/indexing/restart recovery work;
+- [ ] worker cannot escape stored limits;
+- [ ] second-wallet isolation is demonstrated;
 - [ ] state recovers without localStorage;
-- [ ] production UI uses real data;
-- [ ] Builder Code appears on evidence transaction(s);
-- [ ] public URL works end-to-end;
-- [ ] README matches implementation;
-- [ ] Loom/X/form submission material is complete.
+- [ ] production UI uses real stock/price/history data;
+- [ ] public frontend is browser-verified on desktop and mobile;
+- [ ] Builder Code attribution is proven on evidence transaction(s);
+- [ ] README/docs match current implementation exactly;
+- [ ] demo video/X post/form are complete;
+- [ ] exact final commit SHA is frozen.
 
-If any unchecked required item remains, Segue is not yet a complete submission.
+If a required unchecked item remains, do not call Segue a complete submission.
 
 ---
 
-## 15. PRD maintenance protocol
+# 28. PRD maintenance protocol
 
-After every milestone:
-1. compare repository HEAD against this PRD;
-2. update milestone status and exact evidence;
+After every meaningful milestone:
+
+1. inspect repository HEAD and diff;
+2. update milestone status/evidence here;
 3. update `docs/INTEGRATIONS.md`;
-4. keep difficult requirements visible;
-5. do not call planned/implemented/local work deployed or mainnet-verified;
-6. if architecture must change, add a dated entry with verified blocker evidence and explain why the replacement preserves the product thesis;
-7. commit/push the reconciliation before moving on.
+4. update milestone-specific docs when commands/evidence changed;
+5. keep blocked/difficult requirements visible;
+6. never convert planned/local work into deployed/mainnet wording;
+7. add dated decision entries for architecture changes caused by verified evidence;
+8. commit/push the reconciliation before moving on.
 
 ---
 
-## 16. Research references used to lock architecture
+# 29. Primary research references
 
-Primary references:
+Prefer official/current sources and reverify details that can change.
+
 - Base tokenized stocks: https://blog.base.org/tokenized-stocks
-- B20 engineering/total-return feeds: https://blog.base.dev/b20-tokenized-stocks-on-base
+- B20 engineering / total-return feeds: https://blog.base.dev/b20-tokenized-stocks-on-base
 - Base stocks directory: https://base.org/stocks
 - Base Request for Builders: https://blog.base.org/request-for-builders-tokenized-stocks
-- Builder Codes/ERC-8021: https://blog.base.dev/builder-codes-and-erc-8021-fixing-onchain-attribution
+- Builder Codes / ERC-8021: https://blog.base.dev/builder-codes-and-erc-8021-fixing-onchain-attribution
 - Coinbase CDP Node: https://docs.cdp.coinbase.com/data/node/overview
+- Chainlink feeds: https://data.chain.link/feeds
 - 1inch Coinbase Tokenized Stocks support: https://1inch.com/blog/post/coinbase-tokenized-stocks
 - 1inch Classic Swap API: https://business.1inch.com/portal/documentation/apis/swap/classic-swap/introduction
 - 1inch API authentication: https://business.1inch.com/portal/documentation/apis/authentication
 
-Historical provider evidence:
-- 0x Swap API was implemented first but the live Segue USDC→NVDAc request was blocked by 0x RWA authorization on 2026-09-05. See `docs/INTEGRATIONS.md`.
-
-Quest tracking reference:
-- https://viamu.app/opportunities/base-tokenized-stocks-2026
+Historical evidence and current provider status belong in `docs/INTEGRATIONS.md`.
