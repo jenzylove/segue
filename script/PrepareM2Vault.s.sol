@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {M2Attribution} from "./M2Attribution.sol";
+
 import {IERC20} from "../src/interfaces/IERC20.sol";
 import {StockPolicyVault} from "../src/StockPolicyVault.sol";
 import {StockPolicyVaultFactory} from "../src/StockPolicyVaultFactory.sol";
@@ -17,8 +19,7 @@ interface IPrepareM2Vm {
 ///         executor the owner of strategy funds.
 /// @dev Safe to run while the equity feed is stale: no policy/price read happens here.
 contract PrepareM2Vault {
-    IPrepareM2Vm internal constant VM =
-        IPrepareM2Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    IPrepareM2Vm internal constant VM = IPrepareM2Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     uint256 internal constant BASE_CHAIN_ID = 8453;
 
@@ -30,10 +31,12 @@ contract PrepareM2Vault {
     error VaultLimitTooSmall(uint256 required, uint256 actual);
     error InsufficientOwnerUSDC(uint256 required, uint256 actual);
     error InvalidAmount();
+    error OwnerIsExecutor();
     error TokenApprovalFailed();
 
     function run() external returns (address vaultAddress) {
         if (block.chainid != BASE_CHAIN_ID) revert WrongChain(block.chainid);
+        bytes memory attribution = M2Attribution.configuredSuffix();
 
         uint256 ownerKey = VM.envUint("DEMO_OWNER_PRIVATE_KEY");
         address expectedOwner = VM.envAddress("DEMO_OWNER_ADDRESS");
@@ -41,12 +44,12 @@ contract PrepareM2Vault {
         if (actualOwner != expectedOwner) revert OwnerKeyMismatch(expectedOwner, actualOwner);
 
         address executor = VM.envAddress("EXECUTOR_ADDRESS");
+        if (executor == expectedOwner) revert OwnerIsExecutor();
         address usdc = VM.envAddress("USDC_ADDRESS");
         uint256 requiredUSDC = VM.envUint("M2_BUY_USDC_ATOMIC");
         if (requiredUSDC == 0) revert InvalidAmount();
 
-        StockPolicyVaultFactory factory =
-            StockPolicyVaultFactory(VM.envAddress("FACTORY_ADDRESS"));
+        StockPolicyVaultFactory factory = StockPolicyVaultFactory(VM.envAddress("FACTORY_ADDRESS"));
         if (factory.settlementToken() != usdc) {
             revert FactorySettlementMismatch(usdc, factory.settlementToken());
         }
@@ -54,7 +57,14 @@ contract PrepareM2Vault {
         vaultAddress = factory.vaultOf(expectedOwner);
         if (vaultAddress == address(0)) {
             VM.startBroadcast(ownerKey);
-            vaultAddress = factory.createVault(executor, requiredUSDC);
+            vaultAddress = abi.decode(
+                M2Attribution.callWithSuffix(
+                    address(factory),
+                    abi.encodeCall(StockPolicyVaultFactory.createVault, (executor, requiredUSDC)),
+                    attribution
+                ),
+                (address)
+            );
             VM.stopBroadcast();
         }
 
@@ -72,9 +82,19 @@ contract PrepareM2Vault {
             if (ownerBalance < needed) revert InsufficientOwnerUSDC(needed, ownerBalance);
 
             VM.startBroadcast(ownerKey);
-            if (!IERC20(usdc).approve(vaultAddress, 0)) revert TokenApprovalFailed();
-            if (!IERC20(usdc).approve(vaultAddress, needed)) revert TokenApprovalFailed();
-            vault.depositSettlement(needed);
+            if (!abi.decode(
+                    M2Attribution.callWithSuffix(usdc, abi.encodeCall(IERC20.approve, (vaultAddress, 0)), attribution),
+                    (bool)
+                )) revert TokenApprovalFailed();
+            if (!abi.decode(
+                    M2Attribution.callWithSuffix(
+                        usdc, abi.encodeCall(IERC20.approve, (vaultAddress, needed)), attribution
+                    ),
+                    (bool)
+                )) revert TokenApprovalFailed();
+            M2Attribution.callWithSuffix(
+                address(vault), abi.encodeCall(StockPolicyVault.depositSettlement, (needed)), attribution
+            );
             VM.stopBroadcast();
         }
     }

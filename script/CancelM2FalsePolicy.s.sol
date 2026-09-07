@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {M2Attribution} from "./M2Attribution.sol";
+
 import {StockPolicyVault} from "../src/StockPolicyVault.sol";
 
 interface ICancelM2Vm {
@@ -13,8 +15,7 @@ interface ICancelM2Vm {
 
 /// @notice Cleans up the deliberately false B4 policy after its read-only evidence is saved.
 contract CancelM2FalsePolicy {
-    ICancelM2Vm internal constant VM =
-        ICancelM2Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    ICancelM2Vm internal constant VM = ICancelM2Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     uint256 internal constant BASE_CHAIN_ID = 8453;
 
@@ -25,6 +26,7 @@ contract CancelM2FalsePolicy {
 
     function run() external {
         if (block.chainid != BASE_CHAIN_ID) revert WrongChain(block.chainid);
+        bytes memory attribution = M2Attribution.configuredSuffix();
 
         uint256 ownerKey = VM.envUint("DEMO_OWNER_PRIVATE_KEY");
         address owner = VM.envAddress("DEMO_OWNER_ADDRESS");
@@ -39,7 +41,9 @@ contract CancelM2FalsePolicy {
         }
 
         VM.startBroadcast(ownerKey);
-        vault.cancelPolicy(policyId);
+        M2Attribution.callWithSuffix(
+            address(vault), abi.encodeCall(StockPolicyVault.cancelPolicy, (policyId)), attribution
+        );
         VM.stopBroadcast();
     }
 }

@@ -92,21 +92,21 @@ def address_word(value: int) -> str:
     return "0x" + value.to_bytes(32, "big").hex()[-40:]
 
 
-def eth_call(to: str, data: str) -> str:
-    return rpc("eth_call", [{"to": to, "data": data}, "latest"])
+def eth_call(to: str, data: str, block: str) -> str:
+    return rpc("eth_call", [{"to": to, "data": data}, block])
 
 
-def read_uint(vault: str, signature: str, art: dict) -> int:
-    return words(eth_call(vault, selector(signature, art)), 1)[0]
+def read_uint(vault: str, signature: str, art: dict, block: str) -> int:
+    return words(eth_call(vault, selector(signature, art), block), 1)[0]
 
 
-def read_address(vault: str, signature: str, art: dict) -> str:
-    return address_word(read_uint(vault, signature, art))
+def read_address(vault: str, signature: str, art: dict, block: str) -> str:
+    return address_word(read_uint(vault, signature, art, block))
 
 
-def balance_of(token: str, account: str) -> int:
+def balance_of(token: str, account: str, block: str) -> int:
     data = "0x" + BALANCE_OF_SELECTOR + account[2:].rjust(64, "0")
-    return words(eth_call(token, data), 1)[0]
+    return words(eth_call(token, data, block), 1)[0]
 
 
 def decode_policy(result: str) -> dict[str, int | str]:
@@ -174,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     vault = os.environ["DEMO_VAULT_ADDRESS"]
     policy_id = args.policy_id if args.policy_id is not None else int(os.environ.get("M2_POLICY_ID", "0"))
     block_number = int(rpc("eth_blockNumber", []), 16)
+    block = hex(block_number)
 
     state: dict[str, object] = {
         "label": args.label,
@@ -182,26 +183,26 @@ def main(argv: list[str] | None = None) -> int:
         "blockNumber": block_number,
         "gitCommit": git_head(),
         "vault": vault,
-        "owner": read_address(vault, "owner()", art),
-        "executor": read_address(vault, "executor()", art),
-        "activePolicyId": read_uint(vault, "activePolicyId()", art),
-        "vaultMaxDeployedUSDC": read_uint(vault, "vaultMaxDeployedUSDC()", art),
-        "vaultDeployedUSDC": read_uint(vault, "vaultDeployedUSDC()", art),
+        "owner": read_address(vault, "owner()", art, block),
+        "executor": read_address(vault, "executor()", art, block),
+        "activePolicyId": read_uint(vault, "activePolicyId()", art, block),
+        "vaultMaxDeployedUSDC": read_uint(vault, "vaultMaxDeployedUSDC()", art, block),
+        "vaultDeployedUSDC": read_uint(vault, "vaultDeployedUSDC()", art, block),
         "balances": {
-            "USDC": balance_of(os.environ["USDC_ADDRESS"], vault),
-            "B20": balance_of(os.environ["B20_TOKEN_ADDRESS"], vault),
+            "USDC": balance_of(os.environ["USDC_ADDRESS"], vault, block),
+            "B20": balance_of(os.environ["B20_TOKEN_ADDRESS"], vault, block),
         },
     }
 
     if policy_id > 0:
         policy_call = selector("policies(uint256)", art) + encode_uint(policy_id)
-        policy = decode_policy(eth_call(vault, policy_call))
+        policy = decode_policy(eth_call(vault, policy_call, block))
         state["policyId"] = policy_id
         state["policy"] = policy
         if int(policy["stepCount"]) > 0:
             current_step = int(policy["currentStep"])
             step_call = selector("getStep(uint256,uint8)", art) + encode_uint(policy_id) + encode_uint(current_step)
-            state["currentStep"] = decode_step(eth_call(vault, step_call))
+            state["currentStep"] = decode_step(eth_call(vault, step_call, block))
 
     Path(".local").mkdir(exist_ok=True)
     output = Path(f".local/m2-snapshot-{args.label}.json")
@@ -217,7 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     if "policy" in state:
         policy = state["policy"]
         print(f"  policy {policy_id}: {policy['statusLabel']} step={policy['currentStep']}/{policy['stepCount']}")
-        print(f"  current step: {state['currentStep']['statusLabel']}")
+        if "currentStep" in state:
+            print(f"  current step: {state['currentStep']['statusLabel']}")
     print(f"  saved: {output}")
     return 0
 

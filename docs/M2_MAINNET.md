@@ -16,6 +16,35 @@ Keep secrets only in local `.env`.
 
 Do **not** make the executor the demo vault owner just to shorten M2. The trust boundary being proved is that the worker can execute but cannot withdraw user funds. Never paste private keys, API keys, or private RPC URLs into chat, GitHub, commits, or screenshots.
 
+## Local setup (human operator)
+
+Run from the repository root in PowerShell. Python and Foundry (`forge`, `cast`)
+are required. If Foundry is installed but missing from PATH:
+
+```powershell
+$env:PATH = "$env:USERPROFILE\.foundry\bin;$env:PATH"
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+notepad .env
+```
+
+Enter secrets only in that local file. Gate A needs `ONEINCH_API_KEY`,
+`BASE_RPC_URL`, and the public `EXECUTOR_ADDRESS`. Before any broadcast, enter
+matching `EXECUTOR_PRIVATE_KEY`, the separate `DEMO_OWNER_PRIVATE_KEY` and
+`DEMO_OWNER_ADDRESS`, and the real public `BASE_BUILDER_CODE` from base.dev
+Settings. Do not use a made-up attribution code. Leave deployment addresses blank
+until the preceding gate returns them. Keep default public token/feed values
+unless official evidence requires a correction.
+
+`base` is a Foundry RPC alias resolved from local `.env`; no private RPC URL is
+placed in the command arguments. Python's dotenv loader does not update the parent
+PowerShell session. Dot-source `scripts/m2_public_env.ps1` only where shown to
+refresh the two public addresses used by `cast`.
+
+Run commands one at a time, stop on any nonzero exit code, and inspect output
+before continuing. Do not run a later gate on stale calldata or previous artifacts.
+Keep Foundry broadcast/cache files private: share only reviewed public receipts,
+addresses, hashes and evidence JSON. Default verbosity avoids secret-bearing traces.
+
 ## Gate A — route + deployment readiness
 
 ```powershell
@@ -31,14 +60,19 @@ On the first route lookup, copy the printed public target into local `.env` as `
 ```powershell
 forge build
 forge test -vv
-forge script script/DeployMainnet.s.sol:DeployMainnet --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
+forge script script/DeployMainnet.s.sol:DeployMainnet --rpc-url base --broadcast
 python scripts/m2_extract_deploy.py
 ```
+
+All scripted contract calls append the configured ERC-8021 schema-0 suffix to the
+outer transaction, including registry setup, vault creation/funding, policy creation,
+execution and cancellation. Raw registry/factory CREATE deployments are not tagged.
+Attribution on a real receipt still needs verification; local encoding is not B10.
 
 Copy `ASSET_REGISTRY_ADDRESS` and `FACTORY_ADDRESS` into local `.env`, then verify read-only:
 
 ```powershell
-forge script script/VerifyM2Deployment.s.sol:VerifyM2Deployment --rpc-url $env:BASE_RPC_URL -vvvv
+forge script script/VerifyM2Deployment.s.sol:VerifyM2Deployment --rpc-url base
 ```
 
 ## Gate C — create the separate-owner demo vault
@@ -46,8 +80,9 @@ forge script script/VerifyM2Deployment.s.sol:VerifyM2Deployment --rpc-url $env:B
 The demo owner needs a small Base ETH gas balance and at least `M2_BUY_USDC_ATOMIC` (default 1 USDC).
 
 ```powershell
-forge script script/PrepareM2Vault.s.sol:PrepareM2Vault --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
-cast call $env:FACTORY_ADDRESS "vaultOf(address)(address)" $env:DEMO_OWNER_ADDRESS --rpc-url $env:BASE_RPC_URL
+forge script script/PrepareM2Vault.s.sol:PrepareM2Vault --rpc-url base --broadcast
+. ./scripts/m2_public_env.ps1
+cast call $env:FACTORY_ADDRESS "vaultOf(address)(address)" $env:DEMO_OWNER_ADDRESS --rpc-url base
 ```
 
 Save the returned public address as `DEMO_VAULT_ADDRESS`. The script creates the owner's canonical vault if needed, sets the dedicated executor, and funds only the tiny proof amount. It does not read the equity price, so this can happen while the feed is stale.
@@ -56,26 +91,26 @@ Save the returned public address as `DEMO_VAULT_ADDRESS`. The script creates the
 
 ```powershell
 python scripts/m2_preflight.py --require-fresh-feeds
-forge script script/CreateM2RoundTripPolicy.s.sol:CreateM2RoundTripPolicy --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
+forge script script/CreateM2RoundTripPolicy.s.sol:CreateM2RoundTripPolicy --rpc-url base --broadcast
 python scripts/m2_condition_probe.py --policy-id 1 --expect ready
 python scripts/m2_snapshot.py --label before-buy --policy-id 1
 ```
 
 The policy is: (1) bounded true NVDAc condition → spend exactly the tiny USDC amount to buy NVDAc; (2) only after step 1 succeeds, sell 100% of that B20 back to USDC. Both executions re-read the official Chainlink-backed registry.
 
-The condition probe saves `.local/m2-condition-1.json`; the snapshot saves the exact block, local git SHA, owner/executor, policy/current-step state, deployed-cap state and USDC/B20 vault balances.
+The condition probe saves `.local/m2-condition-1-ready.json`; the snapshot saves the exact block, local git SHA, owner/executor, policy/current-step state, deployed-cap state and USDC/B20 vault balances.
 
 ## Gate E — B1/B2 real buy
 
 ```powershell
 python scripts/m2_firm_quote.py --direction buy
 $env:M2_ROUTE_CALLDATA=(Get-Content .local/m2-calldata-buy.txt -Raw).Trim()
-forge script script/ExecuteM2Quote.s.sol:ExecuteM2Quote --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
+forge script script/ExecuteM2Quote.s.sol:ExecuteM2Quote --rpc-url base --broadcast
 Remove-Item Env:M2_ROUTE_CALLDATA
 python scripts/m2_snapshot.py --label after-buy --policy-id 1
 ```
 
-The firm helper validates the pair, `from=vault`, `origin=executor`, `receiver=vault`, frozen `tx.to`, calldata, zero native value, and no partial fill. The executor EOA never calls 1inch directly. A firm provider response is **B1**; the successful Base receipt and changed balances are **B2**.
+The firm helper checks Base RPC chain id and validates the response pair, `from=vault`, `origin=executor`, `receiver=vault`, frozen `tx.to`, calldata, zero native value, and requests no partial fill. Receiver/origin/amount are request parameters, not independently echoed guarantees. The executor EOA never calls 1inch directly. A provider response is a route candidate; **B1** also requires successful simulation through the deployed vault (Foundry performs this before broadcasting); the successful Base receipt and changed balances are **B2**.
 
 ## Gate F — B3 real sell
 
@@ -84,7 +119,7 @@ The reverse helper defaults to the vault's actual NVDAc balance:
 ```powershell
 python scripts/m2_firm_quote.py --direction sell
 $env:M2_ROUTE_CALLDATA=(Get-Content .local/m2-calldata-sell.txt -Raw).Trim()
-forge script script/ExecuteM2Quote.s.sol:ExecuteM2Quote --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
+forge script script/ExecuteM2Quote.s.sol:ExecuteM2Quote --rpc-url base --broadcast
 Remove-Item Env:M2_ROUTE_CALLDATA
 python scripts/m2_snapshot.py --label after-sell --policy-id 1
 ```
@@ -96,12 +131,37 @@ The second execution must complete the same policy and return the B20 exposure t
 After policy 1 is `COMPLETED`, `nextPolicyId` should be 2. Keep `M2_FALSE_POLICY_ID=2` unless chain state proves otherwise.
 
 ```powershell
-forge script script/CreateM2FalseConditionPolicy.s.sol:CreateM2FalseConditionPolicy --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
+forge script script/CreateM2FalseConditionPolicy.s.sol:CreateM2FalseConditionPolicy --rpc-url base --broadcast
 python scripts/m2_condition_probe.py --policy-id 2 --expect false
-forge script script/CancelM2FalsePolicy.s.sol:CancelM2FalsePolicy --rpc-url $env:BASE_RPC_URL --broadcast -vvvv
 ```
 
-The false policy puts its `PRICE_ABOVE` threshold above the current official feed. The read-only probe must return `executable: false` / `CONDITION_FALSE` and saves `.local/m2-condition-2.json`. Together with the pre-buy `READY` capture, that closes the true/false B4 condition proof without mocks or weakening the contract.
+The false policy puts its `PRICE_ABOVE` threshold above the current official feed. The read-only probe must return `executable: false` / `CONDITION_FALSE` and saves `.local/m2-condition-2-false.json`. The false policy does not require a new deposit after round-trip fees/slippage:
+preview checks its condition before the balance check. Its separate
+`M2_FALSE_POLICY_TTL_SECONDS=86400` leaves time to observe natural feed staleness.
+
+Before cancelling, capture an actual stale B20 feed rejection while the policy is
+still live and unexpired (more than six hours after the last equity feed update):
+
+```powershell
+python scripts/m2_condition_probe.py --policy-id 2 --expect stale
+```
+
+This must decode the exact deployed `StalePrice(address,uint256)` error for the
+configured B20 and saves `.local/m2-condition-2-stale.json`. RPC failures, a false
+condition, expiry, or a stale USDC feed do not count. If a known historical block
+has the required live-policy/stale-feed state, add `--block-number <observed-block>`;
+use an archive-capable RPC. No state overrides or simulated timestamps count.
+
+Then cancel with the owner:
+
+```powershell
+forge script script/CancelM2FalsePolicy.s.sol:CancelM2FalsePolicy --rpc-url base --broadcast
+```
+
+The READY, FALSE, and STALE captures are separate files, each with all reads pinned
+to its reported block. B4 remains open if natural staleness was not captured before
+expiry/cancellation; repeat the owner-controlled proof policy with its actual next
+policy id if necessary. Do not label a general RPC failure as stale-feed evidence.
 
 ## M2 evidence required
 
@@ -124,3 +184,9 @@ Do not call M2 complete from unit tests, an indicative quote, simulation, or a p
 - 1inch Coinbase Tokenized Stocks support: https://1inch.com/blog/post/coinbase-tokenized-stocks
 - 1inch Classic Swap API v6.1: https://business.1inch.com/portal/documentation/apis/swap/classic-swap/introduction
 - 1inch API authentication: https://business.1inch.com/portal/documentation/apis/authentication
+
+## 2026-09-07 continuation audit
+
+See `docs/M2_AUDIT.md` for local verification, exact fixes, research provenance,
+and remaining human gates. No provider response or mainnet transaction was
+obtained during this audit. B1-B4 remain open.

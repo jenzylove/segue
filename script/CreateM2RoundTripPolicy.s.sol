@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {M2Attribution} from "./M2Attribution.sol";
+
 import {IERC20} from "../src/interfaces/IERC20.sol";
 import {StockPolicyVault} from "../src/StockPolicyVault.sol";
 import {StockPolicyVaultFactory} from "../src/StockPolicyVaultFactory.sol";
@@ -17,8 +19,7 @@ interface ICreateM2PolicyVm {
 /// @dev Policy creation itself reads the registered Chainlink feed, so run only
 ///      after `m2_preflight.py --require-fresh-feeds` passes.
 contract CreateM2RoundTripPolicy {
-    ICreateM2PolicyVm internal constant VM =
-        ICreateM2PolicyVm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    ICreateM2PolicyVm internal constant VM = ICreateM2PolicyVm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     uint256 internal constant BASE_CHAIN_ID = 8453;
     uint256 internal constant BPS = 10_000;
@@ -36,6 +37,7 @@ contract CreateM2RoundTripPolicy {
 
     function run() external returns (uint256 policyId) {
         if (block.chainid != BASE_CHAIN_ID) revert WrongChain(block.chainid);
+        bytes memory attribution = M2Attribution.configuredSuffix();
 
         uint256 ownerKey = VM.envUint("DEMO_OWNER_PRIVATE_KEY");
         address owner = VM.envAddress("DEMO_OWNER_ADDRESS");
@@ -57,8 +59,7 @@ contract CreateM2RoundTripPolicy {
         ) revert InvalidBounds();
 
         StockPolicyVault vault = StockPolicyVault(vaultAddress);
-        StockPolicyVaultFactory factory =
-            StockPolicyVaultFactory(VM.envAddress("FACTORY_ADDRESS"));
+        StockPolicyVaultFactory factory = StockPolicyVaultFactory(VM.envAddress("FACTORY_ADDRESS"));
 
         if (vault.owner() != owner) revert VaultOwnerMismatch(owner, vault.owner());
         if (vault.executor() != executor) revert VaultExecutorMismatch(executor, vault.executor());
@@ -112,7 +113,12 @@ contract CreateM2RoundTripPolicy {
         });
 
         VM.startBroadcast(ownerKey);
-        policyId = vault.createPolicy(steps, buyAmount);
+        policyId = abi.decode(
+            M2Attribution.callWithSuffix(
+                address(vault), abi.encodeCall(StockPolicyVault.createPolicy, (steps, buyAmount)), attribution
+            ),
+            (uint256)
+        );
         VM.stopBroadcast();
 
         if (policyId != expectedPolicyId) revert UnexpectedPolicyId(expectedPolicyId, policyId);

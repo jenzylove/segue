@@ -5,7 +5,7 @@
 **Hackathon:** Base Builder Quest — Tokenized Stocks  
 **Target network:** Base mainnet  
 **Current repository baseline for this revision:** `414916b539f2d360c0caefa43e729e8e6de940e7`  
-**Current build state:** M1 contract state machine complete; M2 production-path tooling prepared; real Base-mainnet B1–B4 evidence still required.  
+**Current build state:** M1 contract state machine complete; M2 production-path tooling locally audited and hardened on 2026-09-07; real Base-mainnet B1–B4 evidence still required.
 **Source of truth:** This PRD is the product/build contract. `BUILD_RULES.md`, `AGENTS.md`, `docs/INTEGRATIONS.md`, `docs/ARCHITECTURE.md`, and milestone-specific docs are subordinate execution documents.
 
 ---
@@ -1212,7 +1212,7 @@ Every milestone ends with:
 |---|---|---|
 | M0 Repo/source of truth | **COMPLETE** | PRD/build rules/agent instructions/docs/env/CI baseline |
 | M1 Contract state machine | **COMPLETE** | `615b1908856670601e2d9ae05fc1d4ec52cc66f8`; Foundry build + 24 tests |
-| M2 Real Base-mainnet buy/sell | **IN PROGRESS — tooling prepared** | Current HEAD includes route/deploy/vault/policy/condition/snapshot tooling; B1–B4 still require real local provider/mainnet evidence |
+| M2 Real Base-mainnet buy/sell | **IN PROGRESS — tooling audited** | Route/deploy/vault/policy/condition/snapshot tooling passes local audit; B1–B4 still require protected provider/mainnet execution |
 | M3 Autonomous worker | NOT STARTED | Deployed/restart-safe worker; B5–B6 |
 | M4 Persistence/history/multi-user | NOT STARTED | PostgreSQL + recovery/isolation; B7–B9 |
 | M5 Trading frontend | NOT STARTED | Real data/browser flow |
@@ -1237,6 +1237,11 @@ Since the initial 1inch provider switch, the repo added/hardened:
 - secret-scanning hardening.
 
 M2 is **not complete** until B1–B4 have real evidence.
+
+The 2026-09-07 continuation audit hardened block-pinned evidence, exact stale
+revert capture, target/feed/calldata validation, distinct owner/executor roles,
+post-round-trip false-policy setup, and ERC-8021 suffixing on supported M2 script
+calls. It produced local test evidence only; see `docs/M2_AUDIT.md`.
 
 The immediate human-only dependencies may include:
 

@@ -8,5 +8,8 @@ optimizer_runs = 200
 via_ir = true
 evm_version = "cancun"
 
+[rpc_endpoints]
+base = "${BASE_RPC_URL}"
+
 [fmt]
 line_length = 120

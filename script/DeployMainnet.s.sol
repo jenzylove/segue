@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {M2Attribution} from "./M2Attribution.sol";
+
 import {AssetRegistry} from "../src/AssetRegistry.sol";
 import {StockPolicyVaultFactory} from "../src/StockPolicyVaultFactory.sol";
 
@@ -27,6 +29,7 @@ contract DeployMainnet {
 
     function run() external returns (AssetRegistry registry, StockPolicyVaultFactory factory) {
         if (block.chainid != BASE_CHAIN_ID) revert WrongChain(block.chainid);
+        bytes memory attribution = M2Attribution.configuredSuffix();
 
         uint256 privateKey = VM.envUint("EXECUTOR_PRIVATE_KEY");
         address expectedDeployer = VM.envAddress("EXECUTOR_ADDRESS");
@@ -45,8 +48,16 @@ contract DeployMainnet {
         VM.startBroadcast(privateKey);
 
         registry = new AssetRegistry(deployer);
-        registry.registerAsset(usdc, usdcFeed, USDC_MAX_STALENESS, false);
-        registry.registerAsset(b20Token, b20Feed, EQUITY_MAX_STALENESS, true);
+        M2Attribution.callWithSuffix(
+            address(registry),
+            abi.encodeCall(AssetRegistry.registerAsset, (usdc, usdcFeed, USDC_MAX_STALENESS, false)),
+            attribution
+        );
+        M2Attribution.callWithSuffix(
+            address(registry),
+            abi.encodeCall(AssetRegistry.registerAsset, (b20Token, b20Feed, EQUITY_MAX_STALENESS, true)),
+            attribution
+        );
 
         factory = new StockPolicyVaultFactory(address(registry), usdc, executionTarget);
 

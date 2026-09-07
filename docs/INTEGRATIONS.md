@@ -7,10 +7,10 @@ This ledger stays live for the entire build. Do not let planned integrations sil
 | Base mainnet | execution network | YES | Base ETH | real provider tested | M2 preflight reached chainId 8453 and read configured contracts/feeds; deployment + real tx still pending |
 | Coinbase B20 assets | tokenized stocks | YES | none | real provider tested | M2 preflight read official NVDAc on Base and confirmed ERC-20 decimals=8; deployed-registry evidence still pending |
 | Chainlink total-return feeds | trigger + valuation truth | YES | none | real provider tested | M2 preflight read USDC/USD and NVDA total-return feeds on Base; freshness is now enforced before live M2 execution |
-| 1inch Classic Swap API | B20 quote/routing | YES | `ONEINCH_API_KEY` | adapter implemented | Official 1inch material states Coinbase B20 stocks on Base are supported; Segue preflight/firm-quote adapters implemented; dedicated key + live route still required |
+| 1inch Classic Swap API | B20 quote/routing | YES | `ONEINCH_API_KEY` | locally tested | Official v6.1 request semantics rechecked 2026-09-07; response/preflight validators and runbook integration pass locally; dedicated key + live route still required |
 | 0x Swap API | superseded M2 route | NO | `ZEROX_API_KEY` | blocked | Live USDC→NVDAc request returned HTTP 422 `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE` / legal restrictions on 2026-09-05; do not bypass provider compliance |
 | Base RPC | reliable chain access | YES | `BASE_RPC_URL` | real provider tested | Public Base RPC fallback reached mainnet and completed token/feed calls; production worker RPC choice remains deployment-stage work |
-| ERC-8021 Builder Code | Base attribution | YES | `BASE_BUILDER_CODE` | planned | Base app created; domain registration/attributed evidence tx remain deployment-stage work |
+| ERC-8021 Builder Code | Base attribution | YES | `BASE_BUILDER_CODE` | locally tested | Schema-0 suffix matches the official `ox/erc8021` vector and M2 state-changing contract-call scripts append it; real code + attributed receipt remain required |
 | PostgreSQL | worker checkpoints/history cache | YES | `DATABASE_URL` | planned | M4: restart-safe worker reconciliation |
 | Real chart source | trading context UI | YES for frontend | TBD | planned | M5: labelled live chart renders |
 | AI provider | optional rule parser | NO | none | deferred | not part of core submission |
@@ -58,6 +58,14 @@ Therefore M2 replaces only the routing adapter. Coinbase B20, Base, Chainlink, p
 ## Feed-hours limitation
 
 Coinbase B20 tokens can trade 24/7, but the configured Chainlink equity total-return feed can be stale outside its update window. Segue intentionally fails closed. M2 preflight now enforces the same 6-hour equity / 2-hour USDC staleness limits used by the contracts rather than merely printing timestamps.
+
+## 2026-09-07 M2 continuation audit
+
+The local M2 path now has block-pinned snapshots, exact stale-error evidence,
+strict target/feed/calldata validation, distinct false/stale proof files, and
+Builder Code suffixes on supported state-changing contract calls. See
+`docs/M2_AUDIT.md`. No live 1inch response or Base transaction was produced, so
+B1-B4 and real attribution remain unverified.
 
 ## Status vocabulary
 

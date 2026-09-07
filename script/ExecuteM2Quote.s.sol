@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {M2Attribution} from "./M2Attribution.sol";
+
 import {StockPolicyVault} from "../src/StockPolicyVault.sol";
 
 interface IExecuteVm {
@@ -31,6 +33,7 @@ contract ExecuteM2Quote {
 
     function run() external {
         if (block.chainid != BASE_CHAIN_ID) revert WrongChain(block.chainid);
+        bytes memory attribution = M2Attribution.configuredSuffix();
 
         uint256 privateKey = VM.envUint("EXECUTOR_PRIVATE_KEY");
         address expectedExecutor = VM.envAddress("EXECUTOR_ADDRESS");
@@ -54,7 +57,9 @@ contract ExecuteM2Quote {
         if (!executable) revert StepNotExecutable(uint8(reason));
 
         VM.startBroadcast(privateKey);
-        vault.executeStep(policyId, routeCalldata);
+        M2Attribution.callWithSuffix(
+            address(vault), abi.encodeCall(StockPolicyVault.executeStep, (policyId, routeCalldata)), attribution
+        );
         VM.stopBroadcast();
     }
 }

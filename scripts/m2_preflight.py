@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from m2_firm_quote import valid_address
 
 BASE_CHAIN_ID = 8453
 DECIMALS_SELECTOR = "0x313ce567"
@@ -99,9 +100,13 @@ def int_word(hex_data: str, index: int) -> int:
     return value - (1 << 256) if value >= (1 << 255) else value
 
 
-def check_code(label: str, address: str) -> None:
+def check_code(label: str, address: str, *, allow_native_b20: bool = False) -> None:
+    if not valid_address(address) or int(address, 16) == 0:
+        raise RuntimeError(f"{label}: invalid address")
     code = rpc("eth_getCode", [address, "latest"])
     if code == "0x":
+        if not allow_native_b20:
+            raise RuntimeError(f"{label}: no EVM bytecode")
         print(f"  {label}: no EVM bytecode (allowed for native B20; probing interface)")
     else:
         print(f"  {label}: code present")
@@ -118,11 +123,18 @@ def check_token(label: str, address: str) -> int:
 
 def check_feed(label: str, address: str, max_staleness: int) -> tuple[int, int, int, bool]:
     decimals = uint_word(eth_call(address, DECIMALS_SELECTOR))
+    if decimals > 18:
+        raise RuntimeError(f"{label} reports unsupported feed decimals={decimals}")
     data = eth_call(address, LATEST_ROUND_DATA_SELECTOR)
     answer = int_word(data, 1)
     updated_at = uint_word(data, 3)
     if answer <= 0 or updated_at == 0:
         raise RuntimeError(f"{label} returned invalid latestRoundData")
+    if uint_word(data, 4) < uint_word(data, 0):
+        raise RuntimeError(f"{label} returned incomplete latestRoundData")
+    normalized = answer * 10 ** (8 - decimals) if decimals <= 8 else answer // 10 ** (decimals - 8)
+    if normalized == 0:
+        raise RuntimeError(f"{label} normalizes to zero price")
 
     age = max(0, int(time.time()) - updated_at)
     fresh = age <= max_staleness
@@ -159,7 +171,7 @@ def oneinch_get(path: str, params: dict[str, str] | None = None) -> dict:
 def check_oneinch_route() -> tuple[str, bool]:
     spender_payload = oneinch_get("approve/spender")
     spender = str(spender_payload.get("address") or "")
-    if not spender.startswith("0x") or len(spender) != 42:
+    if not valid_address(spender) or int(spender, 16) == 0:
         raise RuntimeError(f"1inch returned invalid spender: {json.dumps(spender_payload)[:400]}")
     check_code("1inch execution target", spender)
 
@@ -238,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
         ("B20 token", "B20_TOKEN_ADDRESS"),
         ("B20 total-return feed", "B20_FEED_ADDRESS"),
     ):
-        check_code(label, os.environ[key])
+        check_code(label, os.environ[key], allow_native_b20=key == "B20_TOKEN_ADDRESS")
 
     check_token("USDC", os.environ["USDC_ADDRESS"])
     check_token("B20 token", os.environ["B20_TOKEN_ADDRESS"])
@@ -254,6 +266,10 @@ def main(argv: list[str] | None = None) -> int:
     feeds_fresh = usdc_fresh and equity_fresh
 
     deployment_blockers: list[str] = []
+    builder_code = os.environ.get("BASE_BUILDER_CODE", "")
+    if (not builder_code or len(builder_code) > 255
+            or any(ord(c) < 33 or ord(c) > 126 or c == "," for c in builder_code)):
+        deployment_blockers.append("set the real BASE_BUILDER_CODE from base.dev Settings before attributed broadcasts")
     if eth_balance == 0:
         deployment_blockers.append("executor has zero Base ETH for deployment gas")
     if not target_configured:

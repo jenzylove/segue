@@ -157,7 +157,8 @@ def validate_swap_payload(
         raise RuntimeError(f"1inch tx.to mismatch: {tx.get('to')}")
 
     calldata = str(tx.get("data") or "")
-    if not calldata.startswith("0x") or len(calldata) < 10:
+    if (not calldata.startswith("0x") or len(calldata) < 10 or len(calldata) % 2
+            or any(c not in "0123456789abcdefABCDEF" for c in calldata[2:])):
         raise RuntimeError("1inch swap missing usable tx.data")
     if parse_tx_value(tx.get("value")) != 0:
         raise RuntimeError("ERC-20→ERC-20 swap unexpectedly requires native value")
@@ -190,6 +191,10 @@ def main(argv: list[str] | None = None) -> int:
     configured_target = os.environ["EXECUTION_TARGET_ADDRESS"]
     if not valid_address(vault) or not valid_address(executor) or not valid_address(configured_target):
         raise ValueError("DEMO_VAULT_ADDRESS, EXECUTOR_ADDRESS and EXECUTION_TARGET_ADDRESS must be valid addresses")
+
+    chain_id = int(rpc("eth_chainId", []), 16)
+    if chain_id != BASE_CHAIN_ID:
+        raise RuntimeError(f"wrong chain: expected {BASE_CHAIN_ID}, got {chain_id}")
 
     sell_token, buy_token, sell_amount = resolve_trade(args.direction)
 

@@ -28,6 +28,14 @@ def main() -> None:
         selector = identifiers[signature]
         if len(selector) != 8:
             raise SystemExit(f"invalid selector for {signature}: {selector}")
+    # Error selector used by the read-only stale probe, derived from the contract ABI.
+    import subprocess
+    import os
+    from m2_condition_probe import STALE_PRICE_SELECTOR
+    cast = os.environ.get("CAST_BIN", "cast")
+    derived = subprocess.check_output([cast, "sig", "StalePrice(address,uint256)"], text=True).strip()
+    if derived != STALE_PRICE_SELECTOR:
+        raise SystemExit("StalePrice selector drift")
     print("M2 Foundry artifact selectors OK")
 
 

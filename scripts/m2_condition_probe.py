@@ -27,6 +27,14 @@ PREVIEW_REASONS = (
     "POLICY_CAP",
     "VAULT_CAP",
 )
+# cast sig 'StalePrice(address,uint256)' — AssetRegistry's custom error.
+STALE_PRICE_SELECTOR = "0xeb1fe96e"
+
+
+class RpcRevert(RuntimeError):
+    def __init__(self, data: object):
+        super().__init__("RPC eth_call reverted; no condition evidence accepted")
+        self.data = data
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -64,7 +72,9 @@ def rpc(method: str, params: list) -> str:
     except urllib.error.URLError as exc:
         raise RuntimeError(f"RPC {method} via {safe_host(url)} failed: {exc.reason}") from exc
     if "error" in payload:
-        raise RuntimeError(f"RPC {method} failed: {payload['error']}")
+        if method == "eth_call":
+            raise RpcRevert(payload["error"].get("data"))
+        raise RuntimeError(f"RPC {method} failed")
     return payload["result"]
 
 
@@ -98,10 +108,21 @@ def decode_preview(result: str) -> dict[str, int | bool | str]:
     }
 
 
+def decode_stale(data: object, expected_token: str) -> dict:
+    if not isinstance(data, str) or not data.startswith(STALE_PRICE_SELECTOR) or len(data) != 138:
+        raise RuntimeError("expected exact StalePrice(address,uint256) revert")
+    token_word = int(data[10:74], 16)
+    if token_word != int(expected_token, 16):
+        raise RuntimeError("StalePrice token does not match configured B20")
+    return {"executable": False, "reasonLabel": "STALE_PRICE", "token": expected_token,
+            "updatedAt": int(data[74:], 16), "revertData": data}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Capture Segue M2 previewExecution evidence")
     parser.add_argument("--policy-id", type=int, default=None)
-    parser.add_argument("--expect", choices=("ready", "false", "any"), default="any")
+    parser.add_argument("--expect", choices=("ready", "false", "stale", "any"), default="any")
+    parser.add_argument("--block-number", type=int, help="read an observed historical mainnet block")
     args = parser.parse_args(argv)
 
     load_dotenv()
@@ -121,9 +142,19 @@ def main(argv: list[str] | None = None) -> int:
 
     vault = os.environ["DEMO_VAULT_ADDRESS"]
     calldata = preview_selector() + policy_id.to_bytes(32, "big").hex()
-    raw = rpc("eth_call", [{"to": vault, "data": calldata}, "latest"])
-    decoded = decode_preview(raw)
-    block_number = int(rpc("eth_blockNumber", []), 16)
+    block_number = args.block_number if args.block_number is not None else int(rpc("eth_blockNumber", []), 16)
+    if block_number < 0:
+        raise ValueError("block number must be nonnegative")
+    try:
+        raw = rpc("eth_call", [{"to": vault, "data": calldata}, hex(block_number)])
+    except RpcRevert as exc:
+        if args.expect != "stale":
+            raise
+        decoded = decode_stale(exc.data, os.environ["B20_TOKEN_ADDRESS"])
+    else:
+        if args.expect == "stale":
+            raise RuntimeError("expected StalePrice revert; preview returned normally")
+        decoded = decode_preview(raw)
 
     if args.expect == "ready" and not decoded["executable"]:
         raise RuntimeError(f"expected READY, got {decoded['reasonLabel']}")
@@ -143,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         **decoded,
     }
     Path(".local").mkdir(exist_ok=True)
-    output = Path(f".local/m2-condition-{policy_id}.json")
+    output = Path(f".local/m2-condition-{policy_id}-{args.expect}.json")
     output.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
 
     print("CONDITION PROBE: PASS")
@@ -152,9 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  policyId: {policy_id}")
     print(f"  executable: {decoded['executable']}")
     print(f"  reason: {decoded['reasonLabel']}")
-    print(f"  currentPriceUsd1e8: {decoded['currentPriceUsd1e8']}")
-    print(f"  sellAmount: {decoded['sellAmount']}")
-    print(f"  minBuyAmount: {decoded['minBuyAmount']}")
+    for field in ("currentPriceUsd1e8", "sellAmount", "minBuyAmount", "updatedAt"):
+        if field in decoded:
+            print(f"  {field}: {decoded[field]}")
     print(f"  saved: {output}")
     return 0
 
