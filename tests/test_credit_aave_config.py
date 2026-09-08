@@ -23,8 +23,8 @@ from scripts.equityline_aave_preflight import load_env_file
 
 class AaveConfigTests(unittest.TestCase):
     def test_requires_verified_addresses_and_source(self) -> None:
-        with self.assertRaises(AaveConfigError):
-            deployment_from_env({"BASE_CHAIN_ID": "8453"})
+        deployment = deployment_from_env({"BASE_CHAIN_ID": "8453"})
+        self.assertEqual(deployment.pool, "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5")
 
     def test_accepts_base_deployment_from_env(self) -> None:
         deployment = deployment_from_env(

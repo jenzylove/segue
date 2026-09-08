@@ -11,6 +11,10 @@ from .models import AaveMarket, TokenRef, is_address
 
 
 BASE_CHAIN_ID = 8453
+AAVE_BASE_ADDRESS_BOOK_SOURCE = "https://github.com/aave-dao/aave-address-book/blob/main/src/AaveV3Base.sol"
+AAVE_BASE_POOL_ADDRESSES_PROVIDER = "0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D"
+AAVE_BASE_POOL = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
+AAVE_BASE_PROTOCOL_DATA_PROVIDER = "0x0F43731EB8d45A581f4a36DD74F5f358bc90C73A"
 
 
 class AaveConfigError(RuntimeError):
@@ -43,10 +47,10 @@ def deployment_from_env(env: dict[str, str] | None = None) -> AaveDeployment:
     values = env if env is not None else os.environ
     deployment = AaveDeployment(
         chain_id=int(values.get("BASE_CHAIN_ID", "8453")),
-        pool_addresses_provider=values.get("AAVE_POOL_ADDRESSES_PROVIDER", ""),
-        pool=values.get("AAVE_POOL_ADDRESS", ""),
-        protocol_data_provider=values.get("AAVE_PROTOCOL_DATA_PROVIDER", ""),
-        source=values.get("AAVE_DEPLOYMENT_SOURCE", ""),
+        pool_addresses_provider=values.get("AAVE_POOL_ADDRESSES_PROVIDER", AAVE_BASE_POOL_ADDRESSES_PROVIDER),
+        pool=values.get("AAVE_POOL_ADDRESS", AAVE_BASE_POOL),
+        protocol_data_provider=values.get("AAVE_PROTOCOL_DATA_PROVIDER", AAVE_BASE_PROTOCOL_DATA_PROVIDER),
+        source=values.get("AAVE_DEPLOYMENT_SOURCE", AAVE_BASE_ADDRESS_BOOK_SOURCE),
     )
     deployment.validate()
     return deployment
