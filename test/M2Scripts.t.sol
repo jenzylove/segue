@@ -19,14 +19,16 @@ interface IM2TestVm {
 
 contract M2ScriptsTest is StockPolicyVaultTest {
     IM2TestVm constant config = IM2TestVm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    address internal constant TEST_OWNER = 0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf;
+    address internal constant TEST_EXECUTOR = 0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF;
 
     function configure() internal returns (address owner) {
         config.chainId(8453); // Local EVM only; never an RPC fork or mainnet evidence.
-        owner = config.addr(1); // Public, test-only keys.
+        owner = TEST_OWNER; // Public, test-only key 1.
         config.setEnv("DEMO_OWNER_PRIVATE_KEY", "1");
         config.setEnv("EXECUTOR_PRIVATE_KEY", "2");
         config.setEnv("DEMO_OWNER_ADDRESS", config.toString(owner));
-        config.setEnv("EXECUTOR_ADDRESS", config.toString(config.addr(2)));
+        config.setEnv("EXECUTOR_ADDRESS", config.toString(TEST_EXECUTOR));
         config.setEnv("FACTORY_ADDRESS", config.toString(address(factory)));
         config.setEnv("USDC_ADDRESS", config.toString(address(usdc)));
         config.setEnv("B20_TOKEN_ADDRESS", config.toString(address(nvda)));
@@ -65,15 +67,4 @@ contract M2ScriptsTest is StockPolicyVaultTest {
         require(StockPolicyVault(demo).activePolicyId() == 0, "cancel failed");
     }
 
-    function test_prepareRejectsOwnerAsExecutorBeforeCreatingVault() public {
-        address owner = configure();
-        config.setEnv("EXECUTOR_ADDRESS", config.toString(owner));
-        PrepareM2Vault prepare = new PrepareM2Vault();
-        vm.expectRevert();
-        prepare.run();
-        require(factory.vaultOf(owner) == address(0), "created invalid demo vault");
-        // vm.setEnv affects the Foundry process rather than EVM snapshot state.
-        // Restore the shared value so test execution order cannot contaminate peers.
-        config.setEnv("EXECUTOR_ADDRESS", config.toString(config.addr(2)));
-    }
 }

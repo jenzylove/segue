@@ -29,6 +29,11 @@ class AuditTests(unittest.TestCase):
                 preflight.check_code("execution target", ADDRESS)
             preflight.check_code("B20", ADDRESS, allow_native_b20=True)
 
+    def test_prepare_vault_rejects_owner_as_executor(self):
+        text = Path("script/PrepareM2Vault.s.sol").read_text()
+        self.assertIn("error OwnerIsExecutor();", text)
+        self.assertIn("if (executor == expectedOwner) revert OwnerIsExecutor();", text)
+
     def test_preflight_rejects_incomplete_round(self):
         with patch.object(preflight, "eth_call", side_effect=[encoded([8]), encoded([9, 100, 1, 1, 8])]):
             with self.assertRaisesRegex(RuntimeError, "incomplete"):

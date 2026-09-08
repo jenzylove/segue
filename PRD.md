@@ -5,7 +5,7 @@
 **Hackathon:** Base Builder Quest — Tokenized Stocks  
 **Target network:** Base mainnet  
 **Current repository baseline for this revision:** `414916b539f2d360c0caefa43e729e8e6de940e7`  
-**Current build state:** M1 contract state machine complete; M2 production-path tooling locally audited and hardened on 2026-09-07; real Base-mainnet B1–B4 evidence still required.
+**Current build state:** M1 contract state machine complete; M2 production-path tooling locally audited and hardened on 2026-09-07; 2026-09-08 product pivot adds B20-backed credit missions while preserving Segue's sequenced policy model; real Base-mainnet B1–B4 and Aave credit evidence still required.
 **Source of truth:** This PRD is the product/build contract. `BUILD_RULES.md`, `AGENTS.md`, `docs/INTEGRATIONS.md`, `docs/ARCHITECTURE.md`, and milestone-specific docs are subordinate execution documents.
 
 ---
@@ -71,17 +71,40 @@ Never collapse these into “done.”
 
 # 1. Product thesis
 
-**Segue is an outcome-independent, rule-driven conditional execution layer for Coinbase Tokenized Stocks on Base.**
+**Segue is a self-managing credit and sequenced policy layer for Coinbase Tokenized Stocks on Base.**
 
-The user decides the strategy. Segue executes it when the user’s precommitted conditions become true.
+A user can hold or acquire supported B20 stocks, borrow USDC against them through real Base credit markets, and precommit what should happen next when risk or opportunity conditions change.
 
-Example:
+The user decides the policy. Segue executes only when the user's precommitted conditions become true and the relevant onchain/protocol evidence allows the action.
+
+Credit example:
+
+> I own NVDAc on Base and want 20 USDC without selling it. Use the safest supported Aave market, keep the position above my health-factor buffer, reserve enough USDC for emergency repayment, and if risk deteriorates, repay from reserve before asking me for approval.
+
+Sequenced trading example:
 
 > If NVDAc falls 5% from the price when this step becomes active, buy $20. After that purchase succeeds, if NVDAc rises 8% from the new reference price, sell 50% of the position. Then, if another verified B20 stock reaches my chosen condition, rotate the proceeds into it. Never deploy more than $50 and never accept execution beyond my chosen deviation limit.
 
 The user may leave the browser. Segue continues monitoring and can advance the sequence later.
 
-Segue does **not** predict stocks, recommend trades, decide the next asset, or dynamically rewrite the user’s rules.
+Segue does **not** predict stocks, recommend trades, decide the next asset, invent lending parameters, or dynamically rewrite the user's rules.
+
+## 1.0 2026-09-08 pivot decision
+
+The hackathon narrative now centers on **B20-backed credit missions**:
+
+`B20 collateral -> safe borrow -> monitored credit mission -> sequenced repay/de-risk action`
+
+The original stock-routing vault remains part of the architecture for B20
+acquisition and sequenced follow-up actions, but the primary user promise is:
+
+**Keep the stock. Unlock USDC liquidity. Let Segue enforce what happens next.**
+
+This pivot is allowed by the user and recorded here because Base publicly frames
+Coinbase Tokenized Stocks as composable DeFi assets, including lending/borrowing
+and credit/yield use cases. The pivot does not permit fake integrations, guessed
+addresses, unsafe wallet authority, or a claim that Aave credit is verified until
+real Base/Aave evidence is captured.
 
 ## 1.1 Problem
 

@@ -2,11 +2,39 @@
 
 `PRD.md` is authoritative. This file is a compact implementation map.
 
+## Current product shape
+
+Segue now combines the original sequenced-execution system with the EquityLine
+credit thesis:
+
+```text
+Buy or hold Coinbase B20 stock
+  -> use supported B20 as Aave collateral
+  -> borrow bounded USDC
+  -> monitor health, APR, reserve and oracle state
+  -> execute sequenced repay/de-risk/routing actions under user policy
+```
+
+The original vault contracts remain useful for bounded stock routing and later
+policy execution. The backend adds a credit mission layer that treats Aave
+market state, user balances, health factor and receipts as evidence.
+
 ## Runtime
 
 ```text
 Browser wallet
-  └─ create/fund/configure user vault
+  └─ acquire/hold supported B20, approve bounded credit mission
+        ↓
+Segue API + policy engine
+  - discovers supported B20 collateral
+  - reads Aave Base market parameters
+  - computes safe borrow envelope
+  - records mission/evidence state
+        ↓
+Aave Pool on Base
+  - supply B20 collateral
+  - borrow/repay USDC
+  - expose account health/liquidation state
         ↓
 StockPolicyVaultFactory
         ↓
@@ -23,15 +51,31 @@ StockPolicyVault (per user)
         │
 FastAPI automation worker
   - gas-only executor wallet
-  - discovers/reconciles active vaults
-  - asks onchain state whether a step is executable
-  - obtains validated 1inch Classic Swap calldata
-  - submits transaction
-  - persists tx/provider evidence
+  - discovers/reconciles active credit missions and vault policies
+  - asks onchain/protocol state whether an action is executable
+  - submits bounded repay/de-risk/routing transactions
+  - persists tx/provider/protocol evidence
         ├─ Base RPC
+        ├─ Aave Pool/DataProvider
         ├─ 1inch Classic Swap API
         └─ PostgreSQL cache/index
 ```
+
+## Credit backend
+
+The backend has three policy components:
+
+- Credit Agent: reads verified B20 holdings and Aave parameters, then computes
+  the safe borrowing envelope under the user's max LTV, minimum health factor,
+  reserve and borrow-APR policy.
+- Treasury Agent: executes supply, borrow, repay and withdraw only after wallet
+  approval or a pre-authorized bounded policy.
+- Policy Agent: applies the Segue sequence model to post-borrow actions such as
+  hold, repay from reserve, unwind permitted allocation, or request approval.
+
+The first committed backend slice lives in `backend/segue_api`. It is deliberately
+dependency-light for local tests and exposes a FastAPI app when FastAPI is
+installed.
 
 ## M1 contracts now implemented
 

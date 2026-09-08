@@ -1,5 +1,36 @@
 # Segue Integration Ledger
 
+## 2026-09-08 — Product pivot to B20-backed credit missions
+
+Decision: keep the Segue name and reuse the sequenced policy architecture, but
+shift the primary hackathon narrative toward a self-managing credit line for
+Coinbase Tokenized Stocks on Base.
+
+Official/current evidence:
+
+- Base's tokenized-stocks builder request explicitly calls out credit, yield and
+  self-repaying borrow structures as design space for programmable equities.
+- Base's stocks page describes Coinbase Tokenized Stocks as usable across Base
+  DeFi and lists Aave for lending/borrowing against tokenized stock positions.
+- Base's B20 engineering post says B20 tokens pair with Chainlink total-return
+  feeds and that builders must verify addresses, feeds and token lists against
+  official sources.
+
+Open verification:
+
+- exact current Aave Base deployment addresses;
+- exact B20 collateral reserves accepted by Aave today;
+- LTV, liquidation threshold, borrowable USDC liquidity, borrow APR and minimum
+  practical demo size;
+- live deposit -> borrow -> repay -> withdraw evidence.
+
+Implementation boundary:
+
+- do not hardcode guessed Aave market addresses or risk parameters;
+- do not claim an Aave/B20 credit milestone passed until live Base/Aave evidence
+  exists;
+- keeper actions may only operate inside explicit policy limits.
+
 This ledger stays live for the entire build. Do not let planned integrations silently disappear.
 
 | Integration | Purpose | Required | Credential | Status | Completion evidence |
