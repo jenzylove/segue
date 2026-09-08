@@ -203,9 +203,12 @@ def decode_address(data: str) -> str:
 def decode_three_addresses(data: str) -> tuple[str, str, str]:
     words = decode_words(data, 3)
     decoded = tuple("0x" + f"{value:040x}"[-40:] for value in words[:3])
-    for address in decoded:
-        if not is_address(address):
-            raise AaveConfigError("Aave reserve token address is invalid")
+    if not is_address(decoded[0]):
+        raise AaveConfigError("Aave aToken address is invalid")
+    if decoded[1] != "0x0000000000000000000000000000000000000000" and not is_address(decoded[1]):
+        raise AaveConfigError("Aave stable debt token address is invalid")
+    if not is_address(decoded[2]):
+        raise AaveConfigError("Aave variable debt token address is invalid")
     return decoded
 
 

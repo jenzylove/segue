@@ -12,6 +12,7 @@ from backend.segue_api.aave import (
     aave_price_to_decimal,
     decode_reserve_config,
     decode_reserve_data,
+    decode_three_addresses,
     deployment_from_env,
     ray_to_bps,
     read_aave_market,
@@ -79,6 +80,16 @@ class AaveConfigTests(unittest.TestCase):
         self.assertEqual(ray_to_bps(reserve["variable_borrow_rate"]), 350)
         self.assertEqual(aave_price_to_decimal(100_000_000, 100_000_000), Decimal("1"))
 
+    def test_decodes_v32_reserve_tokens_with_zero_stable_debt_token(self) -> None:
+        a_token = "0x5555555555555555555555555555555555555555"
+        variable_debt_token = "0x7777777777777777777777777777777777777777"
+
+        decoded = decode_three_addresses(encoded_words([int(a_token, 16), 0, int(variable_debt_token, 16)]))
+
+        self.assertEqual(decoded[0], a_token)
+        self.assertEqual(decoded[1], "0x0000000000000000000000000000000000000000")
+        self.assertEqual(decoded[2], variable_debt_token)
+
     def test_read_aave_market_builds_from_live_call_shapes(self) -> None:
         deployment = AaveDeployment(
             chain_id=8453,
@@ -96,7 +107,7 @@ class AaveConfigTests(unittest.TestCase):
             encoded_words([18, 5000, 6500, 10500, 1000, 1, 0, 0, 1, 0, 0]),
             encoded_words([6, 8000, 8500, 10500, 1000, 0, 1, 0, 1, 0, 0]),
             encoded_words([0, 0, 0, 0, 0, 0, 42 * 10**24, 0, 0, 0, 0, 123]),
-            encoded_words([int(a_token, 16), int("0x6666666666666666666666666666666666666666", 16),
+            encoded_words([int(a_token, 16), 0,
                            int("0x7777777777777777777777777777777777777777", 16)]),
             encoded_words([100_000_000]),
             encoded_words([12_500_000_000]),
