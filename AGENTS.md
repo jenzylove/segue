@@ -7,7 +7,8 @@ Read these files before making material changes:
 3. `docs/CODEX_HANDOFF.md` — current continuation state and first task.
 4. `docs/INTEGRATIONS.md` — live provider/integration ledger.
 5. `docs/M2_MAINNET.md` — current mainnet gate/runbook while M2 remains open.
-6. `README.md` — public product framing.
+6. `docs/CREDIT_BACKEND.md` — current B20-backed credit/Aave backend runbook.
+7. `README.md` — public product framing.
 
 Then inspect the repository tree, recent commits, and current HEAD before coding.
 

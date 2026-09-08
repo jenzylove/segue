@@ -77,6 +77,8 @@ The first committed backend slice lives in `backend/segue_api`. It is deliberate
 dependency-light for local tests and exposes a FastAPI app when FastAPI is
 installed.
 
+Current read-only Aave preflight is documented in `docs/CREDIT_BACKEND.md`.
+
 ## M1 contracts now implemented
 
 ### `AssetRegistry`
