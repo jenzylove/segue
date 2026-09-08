@@ -78,6 +78,8 @@ dependency-light for local tests and exposes a FastAPI app when FastAPI is
 installed.
 
 Current read-only Aave preflight is documented in `docs/CREDIT_BACKEND.md`.
+Unsigned Aave transaction planning lives in `backend/segue_api/tx_plan.py` and
+intentionally stops before wallet signing.
 
 ## M1 contracts now implemented
 

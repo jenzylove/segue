@@ -51,6 +51,24 @@ market facts.
 Passing preflight is not transaction evidence. It only means Segue can attempt
 the next phase: user-approved supply/borrow/repay command preparation.
 
+## Unsigned transaction planning
+
+`backend/segue_api/tx_plan.py` prepares unsigned transaction objects for:
+
+- exact B20 collateral approval to the Aave Pool;
+- Aave `supply`;
+- Aave variable-rate USDC `borrow`;
+- exact USDC repayment approval;
+- Aave `repay`;
+- Aave `withdraw`.
+
+The planner first builds the deterministic credit proposal. If the market is
+paused, frozen, not collateral-enabled, not borrow-enabled, too expensive under
+policy, under-liquid, or below the user's minimum health factor, it refuses to
+produce transactions.
+
+The planner does not sign or broadcast. Its output is the human boundary.
+
 ## Human boundary
 
 Stop before any command that needs:
