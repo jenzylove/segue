@@ -16,7 +16,22 @@ from backend.segue_api.aave import (  # noqa: E402
 )
 
 
+def load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def main() -> int:
+    load_env_file(ROOT / ".env")
     try:
         deployment = deployment_from_env()
         rpc_url = os.environ.get("BASE_RPC_URL", "")
@@ -39,4 +54,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
