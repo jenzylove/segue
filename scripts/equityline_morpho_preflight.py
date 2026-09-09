@@ -38,9 +38,10 @@ def _address(value: object) -> str:
 
 
 def select_market(payload: dict, loan: str, collateral: str) -> dict:
-    items = payload.get("items", payload.get("data", {}).get("items", []))
-    if isinstance(payload.get("data"), list):
-        items = payload["data"]
+    data = payload.get("data")
+    items = payload.get("items", data.get("items", []) if isinstance(data, dict) else [])
+    if isinstance(data, list):
+        items = data
     if not isinstance(items, list):
         raise ValueError("Morpho API response has no market items")
     matches = []
