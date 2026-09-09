@@ -67,9 +67,8 @@ def select_market(payload: dict, loan: str, collateral: str) -> dict:
             matches.append(market)
     if len(matches) != 1:
         raise ValueError(
-            f"Morpho Blue has no borrowable NVDAc/USDC market (found {len(matches)}); "
-            "Coinbase tokenized-stock collateral is documented by Morpho under Morpho Midnight, "
-            "which requires a separate market-discovery path"
+            f"Morpho Midnight has no matching borrowable NVDAc/USDC market (found {len(matches)}); "
+            "verify the configured token address against Morpho's live tokenized-stock catalogue"
         )
     market = matches[0]
     for old, new in (("market_id", "marketId"), ("lltv_wad", "lltv"), ("oracle_address", "oracle"), ("irm_address", "irmAddress")):
