@@ -9,5 +9,6 @@ class MissionTests(unittest.TestCase):
             store.save(Mission("m1", "0x"+"1"*40, MissionState.APPROVED, "0xmarket", {}, {}))
             self.assertEqual(reconcile_mission(store, "m1", 0).state, MissionState.WAITING_FOR_LIQUIDITY)
             self.assertEqual(reconcile_mission(store, "m1", 100).state, MissionState.BORROW_READY)
+            store.close()
 
 if __name__ == "__main__": unittest.main()

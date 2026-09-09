@@ -40,3 +40,6 @@ class MissionStore:
         row = self.db.execute("select payload from missions where id=?", (mission_id,)).fetchone()
         if not row: return None
         value = json.loads(row[0]); value["state"] = MissionState(value["state"]); return Mission(**value)
+
+    def close(self) -> None:
+        self.db.close()
