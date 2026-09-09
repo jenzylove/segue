@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - keeps domain tests dependency-light.
 
 from .models import AaveMarket, CreditPolicy, TokenRef
 from .risk import build_credit_proposal
-from .morpho import discover_nvda_markets, market_state, MORPHO_BLUE_BASE, verified_oracle_price
+from .morpho import discover_nvda_markets, market_state, MORPHO_BLUE_BASE, verified_oracle_price, discover_qualified_market
 from .morpho_risk import proposal as morpho_proposal
 from .morpho_plans import borrower_action_plan, lender_supply_plan
 from .mission import Mission, MissionState, MissionStore
@@ -82,12 +82,11 @@ if FastAPI:
     def morpho_credit_proposal(body: dict[str, object]) -> dict[str, object]:
         owner = str(body.get("wallet", "")); collateral_amount = int(body.get("collateral_amount_atomic", 0)); requested = int(body.get("desired_usdc_atomic", 0))
         if not owner or collateral_amount <= 0 or requested <= 0: raise HTTPException(status_code=400, detail="wallet, collateral amount and desired USDC are required")
-        markets = discover_nvda_markets()
-        if not markets: raise HTTPException(status_code=404, detail="no verified Morpho NVDAc market")
-        market = next((m for m in markets if m.get("loan_token", "").lower() == "0x833589fcD6eDb6E08f4c7C32D4f71b54bdA02913".lower()), markets[0])
-        state = market_state("https://api.morpho.org", market["market_id"])
         rpc = os.environ.get("BASE_RPC_URL", "")
-        if not rpc: raise HTTPException(status_code=503, detail="BASE_RPC_URL is required for live oracle risk")
+        if not rpc: raise HTTPException(status_code=503, detail="BASE_RPC_URL is required")
+        try: market = discover_qualified_market(rpc)
+        except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+        state = market_state("https://api.morpho.org", market["market_id"])
         oracle_price = verified_oracle_price(rpc, market["oracle_address"])
         market["_available"] = state["available_liquidity"]
         risk = morpho_proposal(market, collateral_amount, int(body.get("collateral_decimals", 8)), Decimal(oracle_price) / Decimal(10**36), 6, requested, int(body.get("reserve_bps", 2000)))
@@ -103,10 +102,11 @@ if FastAPI:
 
     @app.get("/v1/morpho/market")
     def morpho_market() -> dict[str, object]:
-        markets = discover_nvda_markets()
-        if not markets:
-            raise HTTPException(status_code=404, detail="no Morpho Blue NVDAc market")
-        return {"chain_id": 8453, "market": markets[0], "source": "https://api.morpho.org/v1/blue/markets"}
+        rpc = os.environ.get("BASE_RPC_URL", "")
+        if not rpc: raise HTTPException(status_code=503, detail="BASE_RPC_URL is required")
+        try: market = discover_qualified_market(rpc)
+        except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"chain_id": 8453, "market": market, "source": "https://api.morpho.org/v1/blue/markets"}
 
     _missions = MissionStore()
 
@@ -142,8 +142,10 @@ if FastAPI:
 
     @app.post("/v1/morpho/lender-plan")
     def lender_plan(body: dict[str, object]) -> dict[str, object]:
-        markets = discover_nvda_markets()
-        market = next((m for m in markets if m["loan_token"].lower() == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".lower()), None)
+        rpc = os.environ.get("BASE_RPC_URL", "")
+        if not rpc: raise HTTPException(status_code=503, detail="BASE_RPC_URL is required")
+        try: market = discover_qualified_market(rpc)
+        except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
         if market is None: raise HTTPException(status_code=404, detail="verified NVDAc/USDC market unavailable")
         return lender_supply_plan(MORPHO_BLUE_BASE, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", market["market_id"], int(body["amount"]), wallet=str(body["wallet"]), market=market)
 

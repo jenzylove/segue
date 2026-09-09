@@ -32,6 +32,19 @@ def market_state(api: str, market_id: str) -> dict:
     supply=int(payload.get("total_supply_assets", 0)); borrow=int(payload.get("total_borrow_assets", 0))
     return {"total_supplied_assets": supply, "total_borrowed_assets": borrow, "available_liquidity": max(0, supply-borrow)}
 
+def discover_qualified_market(rpc_url: str, api: str = API, collateral: str = "0xb20000000000000000000078ee7ce2fE4908108C") -> dict:
+    candidates = discover_nvda_markets(api, collateral)
+    qualified=[]
+    for market in candidates:
+        if market.get("loan_token", "").lower() != "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".lower(): continue
+        state=market_state(api, market["market_id"])
+        if state["available_liquidity"] <= 0: continue
+        try: verified_oracle_price(rpc_url, market["oracle_address"])
+        except Exception: continue
+        market.update(state); qualified.append(market)
+    if not qualified: raise ValueError("no qualified Morpho NVDAc market")
+    return sorted(qualified, key=lambda m: m["available_liquidity"], reverse=True)[0]
+
 
 def discover_nvda_markets(api: str = API, collateral: str = "0xb20000000000000000000078ee7ce2fE4908108C") -> list[dict]:
     query = f"chain_id=8453&collateral_token={collateral}&limit=100"
