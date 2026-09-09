@@ -105,6 +105,15 @@ class ApiJourneyTests(unittest.TestCase):
         response = self.client.post(f"/v1/missions/{mission_id}/repay-close", json={"calldata": "0xdeadbeef"})
         self.assertEqual(response.status_code, 400)
 
+    def test_submit_preserves_pre_position_evidence(self) -> None:
+        mission_id = self._mission()
+        with patch.object(api, "_market", return_value=MARKET), patch.object(api, "_snapshot", return_value=POSITION):
+            planned = self.client.post(f"/v1/missions/{mission_id}/plan/borrow", json={"amount": 1_000_000, "idempotency_key": "submit-evidence"})
+        self.assertEqual(planned.status_code, 200, planned.text)
+        submitted = self.client.post(f"/v1/missions/{mission_id}/actions/submit-evidence/submit", json={"tx_hash": "0x" + "a" * 64})
+        self.assertEqual(submitted.status_code, 200, submitted.text)
+        self.assertEqual(submitted.json()["evidence"]["pre_position"]["borrow_shares"], POSITION["borrow_shares"])
+
     def test_list_and_reconcile_routes_are_persistent(self) -> None:
         mission_id = self._mission()
         listed = self.client.get("/v1/missions", params={"wallet": WALLET})

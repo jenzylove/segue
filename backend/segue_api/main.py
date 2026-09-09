@@ -231,7 +231,8 @@ if FastAPI:
         action = _missions.get_action(action_key)
         if not action or action["mission_id"] != mission_id: raise HTTPException(status_code=404, detail="action not found")
         if action["status"] == "CONFIRMED": return action
-        result = _missions.update_action(action_key, status="SUBMITTED", tx_hash=tx_hash, evidence={"submitted": True, "postcondition_verified": False})
+        evidence = {**(action.get("evidence") or {}), "submitted": True, "postcondition_verified": False}
+        result = _missions.update_action(action_key, status="SUBMITTED", tx_hash=tx_hash, evidence=evidence)
         _missions.event(mission_id, "TX_SUBMITTED", {"idempotency_key": action_key, "tx_hash": tx_hash})
         return result
 
