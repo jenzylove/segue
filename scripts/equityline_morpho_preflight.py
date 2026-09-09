@@ -28,9 +28,18 @@ def fetch_markets(base_url: str, loan: str, collateral: str) -> dict:
     # The public REST endpoint's token filters vary by API version; chain/listing
     # filters are stable, so verify the exact token pair locally from the response.
     query = urlencode({"chain_id": "8453", "limit": "1000"})
-    request = Request(f"{base_url.rstrip('/')}/v1/blue/markets?{query}", headers={"accept": "application/json"})
-    with urlopen(request, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
+    all_items = []
+    cursor = None
+    for _ in range(20):
+        suffix = f"&cursor={cursor}" if cursor else ""
+        request = Request(f"{base_url.rstrip('/')}/v1/blue/markets?{query}{suffix}", headers={"accept": "application/json"})
+        with urlopen(request, timeout=20) as response:
+            page = json.loads(response.read().decode("utf-8"))
+        all_items.extend(page.get("data", []))
+        cursor = page.get("cursor")
+        if not cursor:
+            break
+    return {"data": all_items}
 
 
 def _address(value: object) -> str:
