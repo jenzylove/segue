@@ -29,12 +29,20 @@ class MissionStore:
     def __init__(self, path: str | Path = "segue_missions.sqlite3"):
         self.db = sqlite3.connect(path)
         self.db.execute("create table if not exists missions (id text primary key, payload text not null)")
+        self.db.execute("create table if not exists mission_events (id integer primary key autoincrement, mission_id text, kind text, payload text, created_at text)")
         self.db.commit()
 
     def save(self, mission: Mission) -> Mission:
         mission.updated_at = datetime.now(timezone.utc).isoformat()
         self.db.execute("insert or replace into missions values (?,?)", (mission.id, json.dumps(asdict(mission), default=lambda x: x.value)))
         self.db.commit(); return mission
+
+    def event(self, mission_id: str, kind: str, payload: dict) -> None:
+        self.db.execute("insert into mission_events(mission_id,kind,payload,created_at) values (?,?,?,?)", (mission_id, kind, json.dumps(payload), datetime.now(timezone.utc).isoformat()))
+        self.db.commit()
+
+    def timeline(self, mission_id: str) -> list[dict]:
+        return [{"kind": r[0], "payload": json.loads(r[1]), "created_at": r[2]} for r in self.db.execute("select kind,payload,created_at from mission_events where mission_id=? order by id", (mission_id,))]
 
     def get(self, mission_id: str) -> Mission | None:
         row = self.db.execute("select payload from missions where id=?", (mission_id,)).fetchone()

@@ -109,6 +109,11 @@ if FastAPI:
             raise HTTPException(status_code=404, detail="mission not found")
         return asdict(mission)
 
+    @app.get("/v1/missions/{mission_id}/timeline")
+    def mission_timeline(mission_id: str) -> dict[str, object]:
+        if _missions.get(mission_id) is None: raise HTTPException(status_code=404, detail="mission not found")
+        return {"mission_id": mission_id, "events": _missions.timeline(mission_id)}
+
     @app.post("/v1/missions/{mission_id}/plan/{action}")
     def action_plan(mission_id: str, action: str, body: dict[str, object]) -> dict[str, object]:
         mission = _missions.get(mission_id)
