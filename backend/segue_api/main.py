@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from decimal import Decimal
+import os
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -16,7 +17,7 @@ except ImportError:  # pragma: no cover - keeps domain tests dependency-light.
 
 from .models import AaveMarket, CreditPolicy, TokenRef
 from .risk import build_credit_proposal
-from .morpho import discover_nvda_markets, market_state
+from .morpho import discover_nvda_markets, market_state, MORPHO_BLUE_BASE, verified_oracle_price
 from .morpho_risk import proposal as morpho_proposal
 from .morpho_plans import borrower_action_plan, lender_supply_plan
 from .mission import Mission, MissionState, MissionStore
@@ -85,7 +86,12 @@ if FastAPI:
         if not markets: raise HTTPException(status_code=404, detail="no verified Morpho NVDAc market")
         market = next((m for m in markets if m.get("loan_token", "").lower() == "0x833589fcD6eDb6E08f4c7C32D4f71b54bdA02913".lower()), markets[0])
         state = market_state("https://api.morpho.org", market["market_id"])
-        return {"wallet": owner, "market": market, "market_state": state, "risk": {"state": "WAITING_FOR_LIQUIDITY" if state["available_liquidity"] == 0 else "PROPOSED", "available_liquidity_atomic": state["available_liquidity"]}, "provenance": "https://api.morpho.org/v1/blue/markets"}
+        rpc = os.environ.get("BASE_RPC_URL", "")
+        if not rpc: raise HTTPException(status_code=503, detail="BASE_RPC_URL is required for live oracle risk")
+        oracle_price = verified_oracle_price(rpc, market["oracle_address"])
+        market["_available"] = state["available_liquidity"]
+        risk = morpho_proposal(market, collateral_amount, int(body.get("collateral_decimals", 8)), Decimal(oracle_price) / Decimal(10**36), 6, requested, int(body.get("reserve_bps", 2000)))
+        return {"wallet": owner, "market": market, "market_state": state, "oracle_price_1e36": oracle_price, "risk": risk, "provenance": "https://api.morpho.org/v1/blue/markets"}
 
     @app.get("/v1/morpho/nvda-markets")
     def morpho_markets() -> dict[str, object]:
@@ -129,11 +135,17 @@ if FastAPI:
     def action_plan(mission_id: str, action: str, body: dict[str, object]) -> dict[str, object]:
         mission = _missions.get(mission_id)
         if mission is None: raise HTTPException(status_code=404, detail="mission not found")
-        return borrower_action_plan(str(body["morpho"]), mission.market_id, action, str(body.get("calldata", "0x")))
+        markets = discover_nvda_markets()
+        market = next((m for m in markets if m["market_id"] == mission.market_id), None)
+        if market is None: raise HTTPException(status_code=409, detail="persisted market is no longer discoverable")
+        return borrower_action_plan(MORPHO_BLUE_BASE, mission.market_id, action, wallet=mission.owner, amount=int(body.get("amount", 0)), market=market)
 
     @app.post("/v1/morpho/lender-plan")
     def lender_plan(body: dict[str, object]) -> dict[str, object]:
-        return lender_supply_plan(str(body["morpho"]), str(body["usdc"]), str(body["market_id"]), int(body["amount"]), str(body.get("calldata", "0x")))
+        markets = discover_nvda_markets()
+        market = next((m for m in markets if m["loan_token"].lower() == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".lower()), None)
+        if market is None: raise HTTPException(status_code=404, detail="verified NVDAc/USDC market unavailable")
+        return lender_supply_plan(MORPHO_BLUE_BASE, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", market["market_id"], int(body["amount"]), wallet=str(body["wallet"]), market=market)
 
 
 def _market_from_request(request: ProposalRequest) -> AaveMarket:

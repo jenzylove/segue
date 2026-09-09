@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import subprocess
 
 ZERO = "0x0000000000000000000000000000000000000000"
 
@@ -19,13 +20,27 @@ def plan_call(target: str, market_id: str, calldata: str, post: str, *pre: str) 
         raise ValueError("invalid unsigned transaction target or calldata")
     return {"chain_id": 8453, "target": target, "calldata": calldata, "value": "0", "market_id": market_id, "preconditions": list(pre), "expected_postcondition": post}
 
-def lender_supply_plan(morpho: str, usdc: str, market_id: str, amount: int, calldata: str = "0x") -> dict:
-    if amount <= 0: raise ValueError("supply amount must be positive")
-    if calldata == "0x": raise ValueError("calldata must be generated from verified MarketParams; use equityline_morpho_unsigned_plan.py")
-    return plan_call(morpho, market_id, calldata, "market total supplied assets increases by amount", f"USDC allowance to Morpho >= {amount}", f"USDC balance >= {amount}")
+def _cast(signature: str, args: list[str]) -> str:
+    result = subprocess.run(["cast", "calldata", signature, *args], text=True, capture_output=True)
+    if result.returncode: raise ValueError(result.stderr.strip() or "official ABI encoding failed")
+    return result.stdout.strip()
 
-def borrower_action_plan(morpho: str, market_id: str, action: str, calldata: str = "0x") -> dict:
+def _market_tuple(market: dict) -> str:
+    return f"({market['loan_token']},{market['collateral_token']},{market['oracle_address']},{market['irm_address']},{market['lltv_wad']})"
+
+def lender_supply_plan(morpho: str, usdc: str, market_id: str, amount: int, *, wallet: str, market: dict) -> dict:
+    if amount <= 0: raise ValueError("supply amount must be positive")
+    approve = plan_call(usdc, market_id, _cast("approve(address,uint256)",[morpho,str(amount)]), "USDC allowance is set", "lender wallet holds USDC")
+    supply = plan_call(morpho, market_id, _cast("supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",[_market_tuple(market),str(amount),"0",wallet,"0x"]), "market supplied assets increase", "approval transaction confirmed")
+    return {"actions":[approve,supply],"market":market}
+
+def borrower_action_plan(morpho: str, market_id: str, action: str, *, wallet: str, amount: int, market: dict) -> dict:
     posts = {"supply": "collateral supplied to selected market", "borrow": "borrowed assets credited to borrower", "repay": "borrow balance decreases", "withdraw": "collateral returned to borrower"}
     if action not in posts: raise ValueError("unsupported Morpho action")
-    if calldata == "0x": raise ValueError("calldata must be generated from verified MarketParams; use equityline_morpho_unsigned_plan.py")
-    return plan_call(morpho, market_id, calldata, posts[action], "market parameters match selected market", "wallet signature required")
+    if amount <= 0: raise ValueError("action amount must be positive")
+    m = _market_tuple(market)
+    if action == "supply":
+        return {"actions":[plan_call(market["collateral_token"],market_id,_cast("approve(address,uint256)",[morpho,str(amount)]),"collateral allowance is set"),plan_call(morpho,market_id,_cast("supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",[m,str(amount),wallet,"0x"]),posts[action])],"market":market}
+    sigs={"borrow":"borrow((address,address,address,address,uint256),uint256,uint256,address,address)","repay":"repay((address,address,address,address,uint256),uint256,uint256,address,bytes)","withdraw":"withdrawCollateral((address,address,address,address,uint256),uint256,address,address)"}
+    args={"borrow":[m,str(amount),"0",wallet,wallet],"repay":[m,str(amount),"0",wallet,"0x"],"withdraw":[m,str(amount),wallet,wallet]}[action]
+    return {"actions":[plan_call(morpho,market_id,_cast(sigs[action],args),posts[action])],"market":market}

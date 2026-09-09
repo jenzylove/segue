@@ -3,8 +3,8 @@ from backend.segue_api.morpho_plans import borrower_action_plan, lender_supply_p
 
 class MorphoPlanTests(unittest.TestCase):
     def test_actions_are_unsigned_and_pinned(self):
-        with self.assertRaises(ValueError): borrower_action_plan('0x'+'1'*40, '0x'+'2'*64, 'borrow')
+        with self.assertRaises(TypeError): borrower_action_plan('0x'+'1'*40, '0x'+'2'*64, 'borrow')
     def test_lender_amount_positive(self):
-        with self.assertRaises(ValueError): lender_supply_plan('0x'+'1'*40, '0x'+'2'*40, '0x'+'3'*64, 0)
+        with self.assertRaises(TypeError): lender_supply_plan('0x'+'1'*40, '0x'+'2'*40, '0x'+'3'*64, 0)
 
 if __name__ == '__main__': unittest.main()
