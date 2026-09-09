@@ -41,6 +41,10 @@ def fetch_markets(base_url: str, loan: str, collateral: str) -> dict:
             break
     return {"data": all_items}
 
+def fetch_json(url: str) -> dict:
+    with urlopen(Request(url, headers={"accept": "application/json"}), timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
 
 def _address(value: object) -> str:
     return value.get("address", "") if isinstance(value, dict) else str(value or "")
@@ -75,10 +79,7 @@ def select_market(payload: dict, loan: str, collateral: str) -> dict:
         raise ValueError("market is missing verified Morpho parameters")
     market["_borrow_assets"] = int((market.get("state") or {}).get("borrowAssets", market.get("borrowAssets", 0)))
     market["_borrow_rate"] = (market.get("state") or {}).get("borrowRate", market.get("borrowRate"))
-    if market["_borrow_rate"] is None:
-        market["_borrow_rate"] = market.get("continuous_fee_rate")
-    if market["_borrow_rate"] is None:
-        raise ValueError("market is missing current borrow rate")
+    market["_borrow_rate"] = market.get("_borrow_rate")
     return market
 
 
@@ -87,7 +88,13 @@ def main() -> int:
     loan = os.environ.get("USDC_ADDRESS", USDC_DEFAULT)
     collateral = os.environ.get("B20_TOKEN_ADDRESS", NVDA_DEFAULT)
     try:
-        market = select_market(fetch_markets(os.environ.get("MORPHO_API_URL", API_DEFAULT), loan, collateral), loan, collateral)
+        api = os.environ.get("MORPHO_API_URL", API_DEFAULT)
+        market = select_market(fetch_markets(api, loan, collateral), loan, collateral)
+        selector = f"8453:{market['marketId']}"
+        state = fetch_json(f"{api}/v0/blue/markets/{selector}/state").get("data", {})
+        apy = fetch_json(f"{api}/v0/blue/markets/{selector}/apy-averages").get("data", {})
+        market["_borrow_assets"] = state.get("total_borrow_assets", state.get("borrowAssets", 0))
+        market["_borrow_rate"] = apy.get("borrow_apy_averages", apy.get("borrowApy"))
     except Exception as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
         return 2
