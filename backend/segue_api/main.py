@@ -17,6 +17,8 @@ except ImportError:  # pragma: no cover - keeps domain tests dependency-light.
 from .models import AaveMarket, CreditPolicy, TokenRef
 from .risk import build_credit_proposal
 from .morpho import discover_nvda_markets
+from .mission import Mission, MissionState, MissionStore
+import uuid
 
 
 if FastAPI:
@@ -80,6 +82,31 @@ if FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {"chain_id": 8453, "collateral": "0xb20000000000000000000078ee7ce2fE4908108C", "markets": markets}
+
+    @app.get("/v1/morpho/market")
+    def morpho_market() -> dict[str, object]:
+        markets = discover_nvda_markets()
+        if not markets:
+            raise HTTPException(status_code=404, detail="no Morpho Blue NVDAc market")
+        return {"chain_id": 8453, "market": markets[0], "source": "https://api.morpho.org/v1/blue/markets"}
+
+    _missions = MissionStore()
+
+    @app.post("/v1/missions")
+    def create_mission(body: dict[str, object]) -> dict[str, object]:
+        market_id = str(body.get("market_id", ""))
+        owner = str(body.get("owner", ""))
+        if not market_id or not owner:
+            raise HTTPException(status_code=400, detail="owner and market_id are required")
+        mission = Mission(str(uuid.uuid4()), owner, MissionState.PROPOSED, market_id, dict(body.get("policy", {})), dict(body.get("snapshot", {})))
+        return asdict(_missions.save(mission))
+
+    @app.get("/v1/missions/{mission_id}")
+    def get_mission(mission_id: str) -> dict[str, object]:
+        mission = _missions.get(mission_id)
+        if mission is None:
+            raise HTTPException(status_code=404, detail="mission not found")
+        return asdict(mission)
 
 
 def _market_from_request(request: ProposalRequest) -> AaveMarket:
