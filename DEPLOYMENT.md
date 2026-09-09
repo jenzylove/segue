@@ -38,7 +38,13 @@ provider API keys on this credit service.
 
 Attach a Railway Volume to the service with the exact mount path `/data`.
 Volumes are runtime storage, so they must be configured in the service rather
-than declared in the Dockerfile.
+than declared in the Dockerfile. The image creates `/data` so a missing volume
+does not crash startup, but a deployment without the volume only has ephemeral
+mission data and is not persistence-ready.
+
+If the service logs `sqlite3.OperationalError: unable to open database file`,
+the volume is absent or mounted at a different path. Add/attach the volume at
+`/data`, keep `SEGUE_DB_PATH` exactly as shown above, and redeploy.
 
 Run a safe, read-only worker pass from the same persistent volume with:
 

@@ -1,8 +1,17 @@
 import tempfile, unittest
+from pathlib import Path
 from backend.segue_api.mission import Mission, MissionState, MissionStore
 from backend.segue_api.worker import reconcile_mission
 
 class MissionTests(unittest.TestCase):
+    def test_creates_parent_directory_for_configured_database(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = f"{d}/nested/mission-data/missions.sqlite3"
+            store = MissionStore(path)
+            self.assertTrue(store.db.execute("select 1").fetchone())
+            self.assertTrue(Path(path).exists())
+            store.close()
+
     def test_restart_and_liquidity_resume(self):
         with tempfile.TemporaryDirectory() as d:
             store = MissionStore(d + "/missions.sqlite3")

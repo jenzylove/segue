@@ -11,6 +11,7 @@ class RailwayDeploymentTests(unittest.TestCase):
         self.assertNotIn("VOLUME", dockerfile)
         self.assertIn("SEGUE_DB_PATH=/data/segue_missions.sqlite3", dockerfile)
         self.assertIn("--host 0.0.0.0 --port ${PORT:-8000}", dockerfile)
+        self.assertIn("RUN mkdir -p /data", dockerfile)
 
     def test_railway_config_uses_root_dockerfile_and_healthcheck(self) -> None:
         config = (ROOT / "railway.toml").read_text(encoding="utf-8")

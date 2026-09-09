@@ -34,6 +34,13 @@ class MissionStore:
     """Durable SQLite index; Base chain remains the source of truth."""
 
     def __init__(self, path: str | Path = "segue_missions.sqlite3"):
+        # SQLite does not create missing parent directories.  Railway mounts
+        # the persistent volume at runtime, so make the configured directory
+        # available before the module-level store opens its database.  This
+        # also keeps local/custom SEGUE_DB_PATH values from failing at import.
+        if str(path) != ":memory:":
+            db_path = Path(path).expanduser()
+            db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("create table if not exists missions (id text primary key, payload text not null)")
