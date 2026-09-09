@@ -44,3 +44,11 @@ def borrower_action_plan(morpho: str, market_id: str, action: str, *, wallet: st
     sigs={"borrow":"borrow((address,address,address,address,uint256),uint256,uint256,address,address)","repay":"repay((address,address,address,address,uint256),uint256,uint256,address,bytes)","withdraw":"withdrawCollateral((address,address,address,address,uint256),uint256,address,address)"}
     args={"borrow":[m,str(amount),"0",wallet,wallet],"repay":[m,str(amount),"0",wallet,"0x"],"withdraw":[m,str(amount),wallet,wallet]}[action]
     return {"actions":[plan_call(morpho,market_id,_cast(sigs[action],args),posts[action])],"market":market}
+
+def full_repay_plan(morpho: str, market_id: str, *, wallet: str, market: dict, borrow_shares: int, approval_amount: int) -> dict:
+    if borrow_shares <= 0: raise ValueError("fresh borrow shares must be positive")
+    if approval_amount <= 0: raise ValueError("USDC approval must cover accrued debt")
+    m=_market_tuple(market)
+    approve=plan_call(market["loan_token"],market_id,_cast("approve(address,uint256)",[morpho,str(approval_amount)]),"USDC allowance covers accrued debt")
+    repay=plan_call(morpho,market_id,_cast("repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",[m,"0",str(borrow_shares),wallet,"0x"]),"borrow shares equal zero","fresh position borrow shares verified")
+    return {"actions":[approve,repay],"market":market,"borrow_shares":borrow_shares,"approval_amount":approval_amount}

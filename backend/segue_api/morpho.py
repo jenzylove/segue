@@ -38,6 +38,10 @@ def borrower_position(api: str, market_id: str, wallet: str) -> dict:
     with urlopen(Request(f"{api}/v0/blue/markets/8453:{market_id}/users/{wallet}/position",headers={"accept":"application/json"}),timeout=20) as response:
         return json.loads(response.read().decode()).get("data", {})
 
+def erc20_balance(rpc_url: str, token: str, wallet: str) -> int:
+    data="0x70a08231"+wallet[2:].lower().rjust(64,"0")
+    return int(rpc_call(rpc_url,"eth_call",[{"to":token,"data":data},"latest"]),16)
+
 def discover_qualified_market(rpc_url: str, api: str = API, collateral: str = "0xb20000000000000000000078ee7ce2fE4908108C") -> dict:
     candidates = discover_nvda_markets(api, collateral)
     qualified=[]

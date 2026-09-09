@@ -38,3 +38,6 @@ B20 tokens may trade while an equity total-return feed is outside its update win
 Built for the **Base Builder Quest — Tokenized Stocks**.
 
 The authoritative build contract is `PRD.md`; implementation discipline is in `BUILD_RULES.md` and `AGENTS.md`.
+Segue is an autopilot for tokenized-stock positions: unlock liquidity without selling, or program what your portfolio should do next, while Segue enforces the user's bounded policy after they leave.
+
+The credit mission uses Morpho Blue on Base; the original dependent stock-sequence system remains the policy and treasury execution layer.

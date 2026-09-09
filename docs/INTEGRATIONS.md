@@ -41,6 +41,16 @@ This ledger stays live for the entire build. Do not let planned integrations sil
 | 1inch Classic Swap API | B20 quote/routing | YES | `ONEINCH_API_KEY` | locally tested | Official v6.1 request semantics rechecked 2026-09-07; response/preflight validators and runbook integration pass locally; dedicated key + live route still required |
 | 0x Swap API | superseded M2 route | NO | `ZEROX_API_KEY` | blocked | Live USDC→NVDAc request returned HTTP 422 `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE` / legal restrictions on 2026-09-05; do not bypass provider compliance |
 | Morpho Blue API | credit market discovery | PENDING | none for public API | preflight added | `scripts/equityline_morpho_preflight.py` queries official Morpho Base markets and fails closed until a borrowable NVDAc→USDC market is verified |
+| Morpho Blue Base deployment | credit execution | VERIFIED | none | qualified market selected | Official deployment `0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb`; qualification found usable USDC markets `0x9136…1612a` and `0xb4b4…3d13`; selection ranks available liquidity after direct oracle checks |
+
+## Live credit proof
+
+Segue's verified credit rail is Morpho Blue on Base, locked to market
+`0x91360eea2686ef7ce4966b4e82cf6ff712af02baf0f7211459780d9f5af1612a`.
+The borrower wallet `0x48C8B4D40dE216C652ED4D67f6466CeBA90054CA` supplied
+`2,323,053` NVDAc atomic and holds a live `1,000,000` atomic USDC debt. Approval
+and collateral-supply receipts are recorded in the evidence timeline; the
+worker reads the current position instead of trusting frontend state.
 | Base RPC | reliable chain access | YES | `BASE_RPC_URL` | real provider tested | Public Base RPC fallback reached mainnet and completed token/feed calls; production worker RPC choice remains deployment-stage work |
 | ERC-8021 Builder Code | Base attribution | YES | `BASE_BUILDER_CODE` | locally tested | Schema-0 suffix matches the official `ox/erc8021` vector and M2 state-changing contract-call scripts append it; real code + attributed receipt remain required |
 | PostgreSQL | worker checkpoints/history cache | YES | `DATABASE_URL` | planned | M4: restart-safe worker reconciliation |
