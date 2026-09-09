@@ -34,6 +34,10 @@ def market_state(api: str, market_id: str) -> dict:
     supply=int(payload.get("total_supply_assets", 0)); borrow=int(payload.get("total_borrow_assets", 0))
     return {"total_supplied_assets": supply, "total_borrowed_assets": borrow, "available_liquidity": max(0, supply-borrow)}
 
+def borrower_position(api: str, market_id: str, wallet: str) -> dict:
+    with urlopen(Request(f"{api}/v0/blue/markets/8453:{market_id}/users/{wallet}/position",headers={"accept":"application/json"}),timeout=20) as response:
+        return json.loads(response.read().decode()).get("data", {})
+
 def discover_qualified_market(rpc_url: str, api: str = API, collateral: str = "0xb20000000000000000000078ee7ce2fE4908108C") -> dict:
     candidates = discover_nvda_markets(api, collateral)
     qualified=[]

@@ -30,6 +30,7 @@ class MissionStore:
         self.db = sqlite3.connect(path)
         self.db.execute("create table if not exists missions (id text primary key, payload text not null)")
         self.db.execute("create table if not exists mission_events (id integer primary key autoincrement, mission_id text, kind text, payload text, created_at text)")
+        self.db.execute("create table if not exists mission_actions (idempotency_key text primary key, mission_id text, action text, status text, plan text, tx_hash text, evidence text, created_at text)")
         self.db.commit()
 
     def save(self, mission: Mission) -> Mission:
@@ -43,6 +44,12 @@ class MissionStore:
 
     def timeline(self, mission_id: str) -> list[dict]:
         return [{"kind": r[0], "payload": json.loads(r[1]), "created_at": r[2]} for r in self.db.execute("select kind,payload,created_at from mission_events where mission_id=? order by id", (mission_id,))]
+
+    def action(self, key: str, mission_id: str, action: str, plan: dict, status: str = "READY") -> dict:
+        row=self.db.execute("select idempotency_key,mission_id,action,status,plan,tx_hash,evidence from mission_actions where idempotency_key=?",(key,)).fetchone()
+        if row:return {"idempotency_key":row[0],"mission_id":row[1],"action":row[2],"status":row[3],"plan":json.loads(row[4]),"tx_hash":row[5],"evidence":json.loads(row[6] or "{}")}
+        self.db.execute("insert into mission_actions(idempotency_key,mission_id,action,status,plan,created_at) values (?,?,?,?,?,?)",(key,mission_id,action,status,json.dumps(plan),datetime.now(timezone.utc).isoformat()));self.db.commit()
+        return {"idempotency_key":key,"mission_id":mission_id,"action":action,"status":status,"plan":plan}
 
     def get(self, mission_id: str) -> Mission | None:
         row = self.db.execute("select payload from missions where id=?", (mission_id,)).fetchone()
