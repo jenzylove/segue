@@ -1,11 +1,15 @@
 from __future__ import annotations
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 
 def proposal(market: dict, collateral_atomic: int, collateral_decimals: int, collateral_price: Decimal, debt_decimals: int, requested_debt_atomic: int, reserve_bps: int = 2000) -> dict:
     if collateral_atomic <= 0 or collateral_price <= 0 or requested_debt_atomic <= 0: raise ValueError("amounts and price must be positive")
-    value = Decimal(collateral_atomic) / (Decimal(10) ** collateral_decimals) * collateral_price
+    # Morpho oracle prices quote loan-token atomic units with 1e36 scaling.
+    # collateral_decimals/debt_decimals remain metadata; no unit conversion is
+    # applied to the atomic collateral value before the LLTV calculation.
+    value_atomic = (Decimal(collateral_atomic) * collateral_price / Decimal(10**36)).to_integral_value(rounding=ROUND_DOWN)
+    value = value_atomic / (Decimal(10) ** debt_decimals)
     lltv = Decimal(market["lltv_wad"]) / Decimal(10**18)
-    protocol_max = value * lltv * (Decimal(10) ** debt_decimals)
+    protocol_max = value_atomic * lltv
     safe_max = protocol_max * Decimal(10000-reserve_bps) / Decimal(10000)
     requested_ltv = Decimal(requested_debt_atomic) / (Decimal(10) ** debt_decimals) / value
     available = int(market.get("_available", 0))
