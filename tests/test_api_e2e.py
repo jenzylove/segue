@@ -61,6 +61,14 @@ class ApiJourneyTests(unittest.TestCase):
         self.assertEqual(payload["risk"]["available_executable_borrow_atomic"], 3_199_367)
         self.assertNotIn("collateral_price_usd", payload)
 
+    def test_empty_wallet_position_returns_onboarding_state(self) -> None:
+        empty = {**POSITION, "collateral_position_atomic": 0, "borrow_shares": 0, "debt_assets_atomic": 0}
+        with patch.object(api, "_market", return_value=MARKET), patch.object(api, "_snapshot", return_value=empty):
+            response = self.client.get("/v1/credit/position", params={"wallet": "0x" + "2" * 40})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["risk"]["state"], "NO_COLLATERAL")
+        self.assertEqual(response.json()["mission_state"], "NO_COLLATERAL")
+
     def test_protocol_fields_are_rejected_on_proposal_and_lender_plan(self) -> None:
         proposal = self.client.post("/v1/credit/proposal", json={"wallet": WALLET, "desired_usdc_atomic": 1, "calldata": "0xdeadbeef"})
         self.assertEqual(proposal.status_code, 400)

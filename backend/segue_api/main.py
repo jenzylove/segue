@@ -95,9 +95,32 @@ def _snapshot(market: dict, wallet: str) -> dict:
 
 def _risk(market: dict, position: dict, desired: int, reserve_bps: int) -> dict:
     raw = int(market.get("direct_oracle_price") or verified_oracle_price(_rpc(), market["oracle_address"]))
+    collateral_atomic = int(position.get("collateral_position_atomic", 0))
+    if collateral_atomic <= 0:
+        # A connected wallet may be new to Segue. Return a truthful onboarding
+        # state instead of turning an empty position into a 500 response.
+        lltv = Decimal(market["lltv_wad"]) / Decimal(10**18)
+        return {
+            "collateral_value_usd": "0",
+            "protocol_max_debt_atomic": 0,
+            "safe_max_debt_atomic": 0,
+            "requested_ltv": "0",
+            "lltv": str(lltv),
+            "safety_buffer_bps": reserve_bps,
+            "available_executable_borrow_atomic": 0,
+            "requested_debt_atomic": desired,
+            "state": "NO_COLLATERAL",
+            "oracle_price_1e36": raw,
+            "current_debt_atomic": int(position.get("debt_assets_atomic", 0)),
+            "current_ltv": "0",
+            "health_factor": "inf",
+            "health_factor_bps": None,
+            "safety_buffer_atomic": 0,
+            "market_liquidity_atomic": market.get("available_liquidity", 0),
+        }
     # `_available` is an internal copy of live liquidity; it can never be
     # overridden by request data.
-    result = morpho_proposal({**market, "_available": int(market.get("available_liquidity", 0))}, int(position["collateral_position_atomic"]), 8, Decimal(raw), 6, desired, reserve_bps)
+    result = morpho_proposal({**market, "_available": int(market.get("available_liquidity", 0))}, collateral_atomic, 8, Decimal(raw), 6, desired, reserve_bps)
     value_atomic = int(Decimal(result["collateral_value_usd"]) * Decimal(10**6))
     debt = int(position.get("debt_assets_atomic", 0))
     protocol_max = int(result["protocol_max_debt_atomic"])
@@ -140,7 +163,8 @@ if FastAPI:
         try:
             market = _market(); position = _snapshot(market, wallet); risk = _risk(market, position, 1_000_000, 2_000)
             timeline, evidence_hashes = _durable_evidence(wallet)
-            payload = {"wallet": wallet, "market": market, "position": position, "risk": risk, "mission_state": "BORROWED" if position["borrow_shares"] else "BORROW_READY", "live_state_stale": False, "refreshed_at": time.time(), "timeline": timeline, "evidence_count": len(evidence_hashes), "evidence_hashes": evidence_hashes}
+            mission_state = "BORROWED" if position["borrow_shares"] else ("NO_COLLATERAL" if not position.get("collateral_position_atomic") else "BORROW_READY")
+            payload = {"wallet": wallet, "market": market, "position": position, "risk": risk, "mission_state": mission_state, "live_state_stale": False, "refreshed_at": time.time(), "timeline": timeline, "evidence_count": len(evidence_hashes), "evidence_hashes": evidence_hashes}
             _position_cache[key] = (time.time(), payload)
             return payload
         except HTTPException:
