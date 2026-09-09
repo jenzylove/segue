@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - keeps domain tests dependency-light.
 from .models import AaveMarket, CreditPolicy, TokenRef
 from .risk import build_credit_proposal
 from .morpho import discover_nvda_markets
+from .morpho_plans import borrower_action_plan, lender_supply_plan
 from .mission import Mission, MissionState, MissionStore
 import uuid
 
@@ -107,6 +108,16 @@ if FastAPI:
         if mission is None:
             raise HTTPException(status_code=404, detail="mission not found")
         return asdict(mission)
+
+    @app.post("/v1/missions/{mission_id}/plan/{action}")
+    def action_plan(mission_id: str, action: str, body: dict[str, object]) -> dict[str, object]:
+        mission = _missions.get(mission_id)
+        if mission is None: raise HTTPException(status_code=404, detail="mission not found")
+        return borrower_action_plan(str(body["morpho"]), mission.market_id, action, str(body.get("calldata", "0x")))
+
+    @app.post("/v1/morpho/lender-plan")
+    def lender_plan(body: dict[str, object]) -> dict[str, object]:
+        return lender_supply_plan(str(body["morpho"]), str(body["usdc"]), str(body["market_id"]), int(body["amount"]), str(body.get("calldata", "0x")))
 
 
 def _market_from_request(request: ProposalRequest) -> AaveMarket:
