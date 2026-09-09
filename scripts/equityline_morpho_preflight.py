@@ -27,7 +27,7 @@ def load_env(path: Path) -> None:
 def fetch_markets(base_url: str, loan: str, collateral: str) -> dict:
     # The public REST endpoint's token filters vary by API version; chain/listing
     # filters are stable, so verify the exact token pair locally from the response.
-    query = urlencode({"chain_id": "8453", "listed": "true", "limit": "100"})
+    query = urlencode({"chain_id": "8453", "limit": "1000"})
     request = Request(f"{base_url.rstrip('/')}/v1/blue/markets?{query}", headers={"accept": "application/json"})
     with urlopen(request, timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
