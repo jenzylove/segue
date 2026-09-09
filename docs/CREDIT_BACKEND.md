@@ -7,14 +7,14 @@ existing bounded routing vault.
 
 ```text
 supported B20 collateral
-  -> Aave Base market discovery
+  -> Morpho Blue Base market discovery
   -> safe borrow proposal
   -> user-approved supply/borrow
   -> monitored credit mission
   -> sequenced repay/de-risk action
 ```
 
-The backend must never invent Aave parameters, token addresses, prices, health
+The backend must never invent lending parameters, token addresses, prices, health
 factors, liquidity or receipts. If a critical read is unavailable, return
 `BLOCKED`.
 
@@ -80,3 +80,12 @@ Stop before any command that needs:
 - a live borrow/repay transaction.
 
 At that point, prepare the exact command and let the human builder run it locally.
+## Morpho discovery preflight
+
+`python scripts/equityline_morpho_preflight.py` queries Morpho's public REST API
+(`https://api.morpho.org/v1/blue/markets`, chain 8453) for the configured
+NVDAc/USDC pair. It prints `MORPHO_PREFLIGHT_OK` only when exactly one listed
+market has verified market id, oracle, IRM, LLTV, nonzero borrow liquidity, and
+current borrow rate. The health check follows Morpho Blue's onchain rule:
+`maxBorrow = collateral * oraclePrice / 1e36 * LLTV` and a position is healthy
+when `maxBorrow >= borrowed`. No borrowing or signing is performed.
