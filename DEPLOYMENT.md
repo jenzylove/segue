@@ -4,6 +4,12 @@ The repository ships as one FastAPI service: `/` serves the frozen landing
 surface and `/health` plus `/v1/*` serve the live Morpho API. The service never
 holds a wallet key and never signs or broadcasts transactions.
 
+Railway uses the root `Dockerfile` automatically. `railway.toml` pins the
+Dockerfile builder and `/health` deployment check; no custom build or start
+command is required. The image listens on Railway's injected `PORT` (with
+`8000` as a local fallback). Do not add a Docker `VOLUME` instruction: Railway
+mounts a persistent volume at runtime, after the image is built.
+
 Build and run locally with a real Base RPC endpoint:
 
 ```powershell
@@ -17,6 +23,22 @@ persistent volume for `/data`. Do not put the RPC key, wallet keys or provider
 keys in the image or frontend. The current repository has no public-host
 credential configured, so deployment remains a release command rather than a
 claimed public URL.
+
+Railway service variables:
+
+```text
+BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<YOUR_RPC_KEY>
+SEGUE_DB_PATH=/data/segue_missions.sqlite3
+```
+
+`PORT` is supplied by Railway and must not be hardcoded. `MORPHO_API_URL` is
+optional because the service defaults to Morpho's official public API. Do not
+set wallet private keys, `EXECUTOR_PRIVATE_KEY`, `DEMO_OWNER_PRIVATE_KEY`, or
+provider API keys on this credit service.
+
+Attach a Railway Volume to the service with the exact mount path `/data`.
+Volumes are runtime storage, so they must be configured in the service rather
+than declared in the Dockerfile.
 
 Run a safe, read-only worker pass from the same persistent volume with:
 

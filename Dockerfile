@@ -8,6 +8,5 @@ COPY frontend ./frontend
 
 ENV PYTHONUNBUFFERED=1
 ENV SEGUE_DB_PATH=/data/segue_missions.sqlite3
-VOLUME ["/data"]
 EXPOSE 8000
-CMD ["uvicorn", "backend.segue_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn backend.segue_api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
