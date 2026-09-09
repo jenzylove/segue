@@ -18,6 +18,15 @@ keys in the image or frontend. The current repository has no public-host
 credential configured, so deployment remains a release command rather than a
 claimed public URL.
 
+Run a safe, read-only worker pass from the same persistent volume with:
+
+```powershell
+python scripts\segue_worker.py --wallet 0x48C8B4D40dE216C652ED4D67f6466CeBA90054CA
+```
+
+The worker refreshes live market/position state and reconciles submitted
+receipts; it never signs or broadcasts.
+
 After the host is live, verify:
 
 ```text

@@ -11,6 +11,7 @@ from backend.segue_api.main import app
 from backend.segue_api.mission import Mission, MissionState, MissionStore
 from backend.segue_api.morpho_plans import full_repay_plan
 from backend.segue_api.worker import reconcile_receipt
+import scripts.segue_worker as worker_cli
 
 
 MARKET = {
@@ -87,6 +88,10 @@ class ProductFlowTests(unittest.TestCase):
             self.assertEqual(store.get_action("close")["status"], "FAILED")
             self.assertEqual(result.state, MissionState.ERROR)
             store.close()
+
+    def test_worker_entrypoint_fails_closed_without_rpc(self):
+        with patch.object(worker_cli, "load_env"), patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(worker_cli.main([]), 2)
 
 
 if __name__ == "__main__":
