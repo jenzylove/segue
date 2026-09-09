@@ -21,9 +21,11 @@ def plan_call(target: str, market_id: str, calldata: str, post: str, *pre: str) 
 
 def lender_supply_plan(morpho: str, usdc: str, market_id: str, amount: int, calldata: str = "0x") -> dict:
     if amount <= 0: raise ValueError("supply amount must be positive")
+    if calldata == "0x": raise ValueError("calldata must be generated from verified MarketParams; use equityline_morpho_unsigned_plan.py")
     return plan_call(morpho, market_id, calldata, "market total supplied assets increases by amount", f"USDC allowance to Morpho >= {amount}", f"USDC balance >= {amount}")
 
 def borrower_action_plan(morpho: str, market_id: str, action: str, calldata: str = "0x") -> dict:
     posts = {"supply": "collateral supplied to selected market", "borrow": "borrowed assets credited to borrower", "repay": "borrow balance decreases", "withdraw": "collateral returned to borrower"}
     if action not in posts: raise ValueError("unsupported Morpho action")
+    if calldata == "0x": raise ValueError("calldata must be generated from verified MarketParams; use equityline_morpho_unsigned_plan.py")
     return plan_call(morpho, market_id, calldata, posts[action], "market parameters match selected market", "wallet signature required")
