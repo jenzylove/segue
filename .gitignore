@@ -29,3 +29,4 @@ broadcast/
 # Local evidence / generated state
 .local/
 .tmp/
+segue_missions.sqlite3
