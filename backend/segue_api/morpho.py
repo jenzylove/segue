@@ -26,6 +26,12 @@ def verified_oracle_price(rpc: str, oracle: str) -> int:
     if price <= 0: raise ValueError("oracle price is nonpositive")
     return price
 
+def market_state(api: str, market_id: str) -> dict:
+    with urlopen(Request(f"{api}/v0/blue/markets/8453:{market_id}/state", headers={"accept":"application/json"}), timeout=20) as response:
+        payload=json.loads(response.read().decode()).get("data", {})
+    supply=int(payload.get("total_supply_assets", 0)); borrow=int(payload.get("total_borrow_assets", 0))
+    return {"total_supplied_assets": supply, "total_borrowed_assets": borrow, "available_liquidity": max(0, supply-borrow)}
+
 
 def discover_nvda_markets(api: str = API, collateral: str = "0xb20000000000000000000078ee7ce2fE4908108C") -> list[dict]:
     query = f"chain_id=8453&collateral_token={collateral}&limit=100"

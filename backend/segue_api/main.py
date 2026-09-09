@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - keeps domain tests dependency-light.
 
 from .models import AaveMarket, CreditPolicy, TokenRef
 from .risk import build_credit_proposal
-from .morpho import discover_nvda_markets
+from .morpho import discover_nvda_markets, market_state
 from .morpho_risk import proposal as morpho_proposal
 from .morpho_plans import borrower_action_plan, lender_supply_plan
 from .mission import Mission, MissionState, MissionStore
@@ -84,7 +84,8 @@ if FastAPI:
         markets = discover_nvda_markets()
         if not markets: raise HTTPException(status_code=404, detail="no verified Morpho NVDAc market")
         market = next((m for m in markets if m.get("loan_token", "").lower() == "0x833589fcD6eDb6E08f4c7C32D4f71b54bdA02913".lower()), markets[0])
-        return {"wallet": owner, "market": market, "risk": {"state": "WAITING_FOR_LIQUIDITY", "available_liquidity_atomic": 0}, "provenance": "https://api.morpho.org/v1/blue/markets"}
+        state = market_state("https://api.morpho.org", market["market_id"])
+        return {"wallet": owner, "market": market, "market_state": state, "risk": {"state": "WAITING_FOR_LIQUIDITY" if state["available_liquidity"] == 0 else "PROPOSED", "available_liquidity_atomic": state["available_liquidity"]}, "provenance": "https://api.morpho.org/v1/blue/markets"}
 
     @app.get("/v1/morpho/nvda-markets")
     def morpho_markets() -> dict[str, object]:
