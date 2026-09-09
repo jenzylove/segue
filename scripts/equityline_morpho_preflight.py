@@ -61,9 +61,11 @@ def select_market(payload: dict, loan: str, collateral: str) -> dict:
     for market in items:
         if not isinstance(market, dict):
             continue
-        if str(market.get("collateral_token", "")).lower() != collateral.lower():
+        market_collateral = market.get("collateral_token", _address(market.get("collateralAsset", market.get("collateralToken"))))
+        market_loan = market.get("loan_token", _address(market.get("loanAsset", market.get("loanToken"))))
+        if str(market_collateral).lower() != collateral.lower() and not (market_collateral == "" and market_loan == loan):
             continue
-        if str(market.get("loan_token", "")).lower() == loan.lower():
+        if str(market_loan).lower() == loan.lower() or market.get("marketId"):
             matches.append(market)
     if not matches:
         raise ValueError(
