@@ -1,34 +1,37 @@
 # Segue Integration Ledger
 
-## 2026-09-08 — Product pivot to B20-backed credit missions
+## 2026-09-09 — Morpho Blue credit rail locked and live proof recorded
 
-Decision: keep the Segue name and reuse the sequenced policy architecture, but
-shift the primary hackathon narrative toward a self-managing credit line for
-Coinbase Tokenized Stocks on Base.
+Decision: keep the Segue name and reuse the sequenced policy architecture, with
+Morpho Blue as the verified credit rail for Coinbase Tokenized Stocks on Base.
+Credit, Treasury and Policy remain one Segue operating loop alongside the
+original dependent stock-sequence system.
 
 Official/current evidence:
 
 - Base's tokenized-stocks builder request explicitly calls out credit, yield and
   self-repaying borrow structures as design space for programmable equities.
 - Base's stocks page describes Coinbase Tokenized Stocks as usable across Base
-  DeFi and lists Aave for lending/borrowing against tokenized stock positions.
+  DeFi and lists lending/borrowing against tokenized stock positions.
 - Base's B20 engineering post says B20 tokens pair with Chainlink total-return
   feeds and that builders must verify addresses, feeds and token lists against
   official sources.
 
-Open verification:
+Verified Morpho Blue market:
 
-- exact current Aave Base deployment addresses;
-- exact B20 collateral reserves accepted by Aave today;
-- LTV, liquidation threshold, borrowable USDC liquidity, borrow APR and minimum
-  practical demo size;
-- live deposit -> borrow -> repay -> withdraw evidence.
+- deployment: `0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb`;
+- locked MarketParams id: `0x91360eea2686ef7ce4966b4e82cf6ff712af02baf0f7211459780d9f5af1612a`;
+- loan token: Base USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`;
+- collateral: NVDAc `0xb20000000000000000000078ee7ce2fE4908108C`;
+- oracle: `0xE0AE3137a30393410B595E1C1d572a1449A969ea` (direct `price()` agrees with Morpho API state);
+- IRM: AdaptiveCurveIRM `0x46415998764C29aB2a25CbeA6254146D50D22687`, enabled in Morpho;
+- LLTV: `770000000000000000` (77%);
+- current indexed liquidity: `97,000,001` USDC atomic (read at runtime; it can change).
 
 Implementation boundary:
 
-- do not hardcode guessed Aave market addresses or risk parameters;
-- do not claim an Aave/B20 credit milestone passed until live Base/Aave evidence
-  exists;
+- do not hardcode guessed Morpho market addresses or risk parameters;
+- do not claim a credit milestone passed until live Base/Morpho evidence exists;
 - keeper actions may only operate inside explicit policy limits.
 
 This ledger stays live for the entire build. Do not let planned integrations silently disappear.
@@ -40,20 +43,23 @@ This ledger stays live for the entire build. Do not let planned integrations sil
 | Chainlink total-return feeds | trigger + valuation truth | YES | none | real provider tested | M2 preflight read USDC/USD and NVDA total-return feeds on Base; freshness is now enforced before live M2 execution |
 | 1inch Classic Swap API | B20 quote/routing | YES | `ONEINCH_API_KEY` | locally tested | Official v6.1 request semantics rechecked 2026-09-07; response/preflight validators and runbook integration pass locally; dedicated key + live route still required |
 | 0x Swap API | superseded M2 route | NO | `ZEROX_API_KEY` | blocked | Live USDC→NVDAc request returned HTTP 422 `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE` / legal restrictions on 2026-09-05; do not bypass provider compliance |
-| Morpho Blue API | credit market discovery | PENDING | none for public API | preflight added | `scripts/equityline_morpho_preflight.py` queries official Morpho Base markets and fails closed until a borrowable NVDAc→USDC market is verified |
-| Morpho Blue Base deployment | credit execution | VERIFIED | none | qualified market selected | Official deployment `0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb`; qualification found usable USDC markets `0x9136…1612a` and `0xb4b4…3d13`; selection ranks available liquidity after direct oracle checks |
+| Morpho Blue API | credit market discovery/state | real provider tested | none for public API | locked market selected | `/v1/blue/markets` discovery plus `/v0/blue/markets/{chain}:{id}/state` and oracle state; locked market is revalidated against Base RPC |
+| Morpho Blue Base deployment | credit execution | mainnet verified | none | locked | Official deployment `0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb`; `eth_getCode`, `idToMarketParams`, IRM enablement and oracle checks pass for `0x9136…1612a` |
 
 ## Live credit proof
 
 Segue's verified credit rail is Morpho Blue on Base, locked to market
 `0x91360eea2686ef7ce4966b4e82cf6ff712af02baf0f7211459780d9f5af1612a`.
 The borrower wallet `0x48C8B4D40dE216C652ED4D67f6466CeBA90054CA` supplied
-`2,323,053` NVDAc atomic and holds a live `1,000,000` atomic USDC debt. Approval
-and collateral-supply receipts are recorded in the evidence timeline; the
-worker reads the current position instead of trusting frontend state.
+`2,323,053` NVDAc atomic and holds a live `1,000,000` atomic USDC debt. Approval,
+collateral-supply and borrow receipts are recorded in the evidence timeline; the
+worker reads the current position instead of trusting frontend state. The
+recovered borrow transaction is
+`0x341e9afc0ea0a09c81e0e64332f0283257cc5b3727db222d9f0a50b5d50963f5`.
 | Base RPC | reliable chain access | YES | `BASE_RPC_URL` | real provider tested | Public Base RPC fallback reached mainnet and completed token/feed calls; production worker RPC choice remains deployment-stage work |
 | ERC-8021 Builder Code | Base attribution | YES | `BASE_BUILDER_CODE` | locally tested | Schema-0 suffix matches the official `ox/erc8021` vector and M2 state-changing contract-call scripts append it; real code + attributed receipt remain required |
-| PostgreSQL | worker checkpoints/history cache | YES | `DATABASE_URL` | planned | M4: restart-safe worker reconciliation |
+| SQLite mission index | worker checkpoints/history/evidence | YES | `SEGUE_DB_PATH` (optional) | locally tested | Durable missions, actions, idempotency keys, market/position/risk snapshots and timeline events; Base remains authoritative |
+| PostgreSQL | scale-out history/index | OPTIONAL | `DATABASE_URL` | planned | Replace the SQLite adapter when deploying multi-instance worker/API |
 | Real chart source | trading context UI | YES for frontend | TBD | planned | M5: labelled live chart renders |
 | AI provider | optional rule parser | NO | none | deferred | not part of core submission |
 | Telegram/Telegraph | none | NO | none | rejected | do not add |

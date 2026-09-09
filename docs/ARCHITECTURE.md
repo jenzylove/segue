@@ -9,15 +9,15 @@ credit thesis:
 
 ```text
 Buy or hold Coinbase B20 stock
-  -> use supported B20 as Aave collateral
+  -> use supported B20 as Morpho Blue collateral
   -> borrow bounded USDC
   -> monitor health, APR, reserve and oracle state
   -> execute sequenced repay/de-risk/routing actions under user policy
 ```
 
 The original vault contracts remain useful for bounded stock routing and later
-policy execution. The backend adds a credit mission layer that treats Aave
-market state, user balances, health factor and receipts as evidence.
+policy execution. The backend adds a credit mission layer that treats Morpho
+Blue market state, user balances, health factor and receipts as evidence.
 
 ## Runtime
 
@@ -27,11 +27,11 @@ Browser wallet
         ↓
 Segue API + policy engine
   - discovers supported B20 collateral
-  - reads Aave Base market parameters
+  - reads the locked Morpho Blue Base MarketParams
   - computes safe borrow envelope
   - records mission/evidence state
         ↓
-Aave Pool on Base
+Morpho Blue on Base
   - supply B20 collateral
   - borrow/repay USDC
   - expose account health/liquidation state
@@ -56,30 +56,35 @@ FastAPI automation worker
   - submits bounded repay/de-risk/routing transactions
   - persists tx/provider/protocol evidence
         ├─ Base RPC
-        ├─ Aave Pool/DataProvider
+        ├─ Morpho Blue API + Base RPC
         ├─ 1inch Classic Swap API
-        └─ PostgreSQL cache/index
+        └─ SQLite mission/evidence index (durable volume)
 ```
+
+The unified FastAPI service serves both the frozen landing surface (`/`) and a
+recoverable position workspace (`/app.html`). The workspace is a thin API
+client: it never owns authority, fabricates state, or accepts raw calldata.
 
 ## Credit backend
 
-The backend has three policy components:
+The backend has three cooperating policy components:
 
-- Credit Agent: reads verified B20 holdings and Aave parameters, then computes
-  the safe borrowing envelope under the user's max LTV, minimum health factor,
-  reserve and borrow-APR policy.
-- Treasury Agent: executes supply, borrow, repay and withdraw only after wallet
-  approval or a pre-authorized bounded policy.
-- Policy Agent: applies the Segue sequence model to post-borrow actions such as
-  hold, repay from reserve, unwind permitted allocation, or request approval.
+- Credit: reads verified B20 holdings and Morpho parameters, then computes the
+  safe borrowing envelope from the live oracle, LLTV, liquidity and reserve.
+- Treasury: prepares supply, borrow, repay and withdraw calls only after wallet
+  approval, persists their idempotency key, and reconciles receipts/postconditions.
+- Policy: applies the Segue dependent sequence model to post-borrow actions such
+  as hold, repay from reserve, unwind a permitted allocation, or request approval.
+  These are one operating loop: read → calculate → execute → monitor → advance.
 
 The first committed backend slice lives in `backend/segue_api`. It is deliberately
 dependency-light for local tests and exposes a FastAPI app when FastAPI is
 installed.
 
-Current read-only Aave preflight is documented in `docs/CREDIT_BACKEND.md`.
-Unsigned Aave transaction planning lives in `backend/segue_api/tx_plan.py` and
-intentionally stops before wallet signing.
+Morpho Blue qualification and the locked live proof are documented in
+`docs/CREDIT_BACKEND.md` and `docs/INTEGRATIONS.md`. Unsigned Morpho transaction
+planning lives in `backend/segue_api/morpho_plans.py` and intentionally stops
+before wallet signing.
 
 ## M1 contracts now implemented
 
@@ -173,12 +178,10 @@ Onchain state is authoritative for:
 - balances;
 - execution events.
 
-PostgreSQL is used for:
-- indexing cursors;
-- friendly UI metadata;
-- worker health;
-- 1inch request/response provenance;
-- transaction evidence cache.
+The current backend uses a durable SQLite index for missions, actions,
+idempotency keys, snapshots, timeline events and receipt evidence. A deployed
+installation can point `SEGUE_DB_PATH` at durable storage; PostgreSQL remains a
+future scale-out option rather than an unimplemented claim.
 
 The app must recover after local/browser state is cleared.
 

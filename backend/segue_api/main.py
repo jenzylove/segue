@@ -1,192 +1,306 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-from decimal import Decimal
 import os
+import uuid
+import time
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
 
 try:
-    from fastapi import FastAPI, HTTPException
-    from pydantic import BaseModel, Field
-except ImportError:  # pragma: no cover - keeps domain tests dependency-light.
+    from fastapi import FastAPI, Header, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.staticfiles import StaticFiles
+except ImportError:  # pragma: no cover
     FastAPI = None
+    Header = lambda default=None: default  # type: ignore
     HTTPException = Exception
-    BaseModel = object
+    CORSMiddleware = None
+    StaticFiles = None
 
-    def Field(default=None, **_: object) -> object:
-        return default
-
-from .models import AaveMarket, CreditPolicy, TokenRef
-from .risk import build_credit_proposal
-from .morpho import discover_nvda_markets, market_state, MORPHO_BLUE_BASE, verified_oracle_price, discover_qualified_market
-from .morpho_risk import proposal as morpho_proposal
-from .morpho_plans import borrower_action_plan, lender_supply_plan
 from .mission import Mission, MissionState, MissionStore
-import uuid
+from .morpho import (
+    API as MORPHO_API,
+    CANONICAL_COLLATERAL,
+    LOCKED_MARKET_ID,
+    MORPHO_BLUE_BASE,
+    USDC_BASE,
+    borrower_position,
+    discover_qualified_market,
+    erc20_balance,
+    live_position_snapshot,
+    verified_oracle_price,
+)
+from .morpho_plans import borrower_action_plan, full_repay_plan, lender_supply_plan, withdraw_plan
+from .morpho_risk import proposal as morpho_proposal
+from .worker import reconcile_live, reconcile_receipt
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_env() -> None:
+    for name in (".env", ".env.local"):
+        path = ROOT / name
+        if not path.exists(): continue
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
+_load_env()
 if FastAPI:
-    app = FastAPI(title="Segue Credit Backend", version="0.2.0")
+    app = FastAPI(title="Segue Credit API", version="1.0.0")
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 else:
     app = None
 
+_missions = MissionStore(os.environ.get("SEGUE_DB_PATH", str(ROOT / "segue_missions.sqlite3")))
+_position_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
-class ProposalRequest(BaseModel):
-    collateral_symbol: str = Field(..., min_length=1)
-    collateral_address: str
-    collateral_decimals: int = Field(..., ge=0, le=36)
-    collateral_balance_atomic: int = Field(..., gt=0)
-    collateral_price_usd: str
-    debt_symbol: str = "USDC"
-    debt_address: str
-    debt_decimals: int = 6
-    debt_price_usd: str = "1"
-    requested_debt_atomic: int = Field(..., gt=0)
-    max_ltv_bps: int = Field(4_000, gt=0, le=10_000)
-    min_health_factor_bps: int = Field(15_000, ge=10_000)
-    reserve_bps: int = Field(2_000, ge=0, le=10_000)
-    max_borrow_apr_bps: int = Field(2_000, ge=0)
-    aave_pool: str
-    aave_data_provider: str
-    aave_ltv_bps: int = Field(..., ge=0, le=10_000)
-    aave_liquidation_threshold_bps: int = Field(..., ge=0, le=10_000)
-    aave_liquidation_bonus_bps: int = Field(..., ge=0)
-    aave_borrow_apr_bps: int = Field(..., ge=0)
-    aave_available_liquidity_atomic: int = Field(..., ge=0)
-    aave_active: bool = True
-    aave_frozen: bool = False
-    aave_paused: bool = False
-    aave_borrowing_enabled: bool = True
-    aave_collateral_enabled: bool = True
-    provenance_source: str
+
+def _rpc() -> str:
+    value = os.environ.get("BASE_RPC_URL", "")
+    if not value: raise HTTPException(status_code=503, detail="BASE_RPC_URL is required for live Base reads")
+    return value
+
+
+def _wallet(body: dict[str, Any]) -> str:
+    value = str(body.get("wallet", body.get("owner", "")))
+    if len(value) != 42 or not value.startswith("0x"):
+        raise HTTPException(status_code=400, detail="wallet must be a valid EVM address")
+    try: int(value[2:], 16)
+    except ValueError: raise HTTPException(status_code=400, detail="wallet must be a valid EVM address")
+    return value
+
+
+def _reject_protocol_inputs(body: dict[str, Any]) -> None:
+    forbidden = {"calldata", "market_id", "morpho_address", "loan_token", "collateral_token", "oracle", "irm", "lltv", "collateral_price_usd", "debt_address"}
+    supplied = sorted(forbidden.intersection(body))
+    if supplied: raise HTTPException(status_code=400, detail=f"backend-owned protocol fields are not accepted: {', '.join(supplied)}")
+
+
+def _market() -> dict:
+    try: return discover_qualified_market(_rpc(), MORPHO_API)
+    except HTTPException: raise
+    except Exception as exc: raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _snapshot(market: dict, wallet: str) -> dict:
+    try: return live_position_snapshot(_rpc(), MORPHO_API, market, wallet)
+    except Exception as exc: raise HTTPException(status_code=502, detail=f"live position read failed: {exc}") from exc
+
+
+def _risk(market: dict, position: dict, desired: int, reserve_bps: int) -> dict:
+    raw = int(market.get("direct_oracle_price") or verified_oracle_price(_rpc(), market["oracle_address"]))
+    # `_available` is an internal copy of live liquidity; it can never be
+    # overridden by request data.
+    result = morpho_proposal({**market, "_available": int(market.get("available_liquidity", 0))}, int(position["collateral_position_atomic"]), 8, Decimal(raw), 6, desired, reserve_bps)
+    value_atomic = int(Decimal(result["collateral_value_usd"]) * Decimal(10**6))
+    debt = int(position.get("debt_assets_atomic", 0))
+    protocol_max = int(result["protocol_max_debt_atomic"])
+    result.update({
+        "oracle_price_1e36": raw,
+        "current_debt_atomic": debt,
+        "current_ltv": str(Decimal(debt) / Decimal(value_atomic)) if debt and value_atomic else "0",
+        "health_factor": str(Decimal(protocol_max) / Decimal(debt)) if debt else "inf",
+        "health_factor_bps": int(Decimal(protocol_max) * 10000 / Decimal(debt)) if debt else None,
+        "safety_buffer_atomic": max(0, protocol_max - debt),
+        "market_liquidity_atomic": market.get("available_liquidity", 0),
+    })
+    return result
+
+
+def _durable_evidence(wallet: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Return the latest wallet timeline and unique transaction evidence."""
+    missions = _missions.by_owner(wallet)
+    if not missions:
+        return [], []
+    timeline = _missions.timeline(missions[0].id)
+    hashes: set[str] = set()
+    for event in timeline:
+        payload = event.get("payload", {})
+        for key, value in payload.items():
+            if key.endswith("tx") and isinstance(value, str) and value.startswith("0x"):
+                hashes.add(value)
+    return timeline, sorted(hashes)
 
 
 if FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "product": "segue-credit"}
+        return {"status": "ok", "product": "segue", "credit_rail": "morpho-blue", "chain_id": "8453"}
 
-    @app.post("/v1/deferred/aave/proposal")
-    def credit_proposal(request: ProposalRequest) -> dict[str, object]:
+    @app.get("/v1/credit/position")
+    def credit_position(wallet: str) -> dict[str, Any]:
+        key = wallet.lower()
         try:
-            proposal = build_credit_proposal(
-                _market_from_request(request),
-                _policy_from_request(request),
-                request.collateral_balance_atomic,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return asdict(proposal)
+            market = _market(); position = _snapshot(market, wallet); risk = _risk(market, position, 1_000_000, 2_000)
+            timeline, evidence_hashes = _durable_evidence(wallet)
+            payload = {"wallet": wallet, "market": market, "position": position, "risk": risk, "mission_state": "BORROWED" if position["borrow_shares"] else "BORROW_READY", "live_state_stale": False, "refreshed_at": time.time(), "timeline": timeline, "evidence_count": len(evidence_hashes), "evidence_hashes": evidence_hashes}
+            _position_cache[key] = (time.time(), payload)
+            return payload
+        except HTTPException:
+            cached = _position_cache.get(key)
+            if cached and time.time() - cached[0] < 300:
+                payload = dict(cached[1]); payload["live_state_stale"] = True; payload["stale_reason"] = "provider temporarily unavailable; showing last verified snapshot"; return payload
+            raise
 
     @app.post("/v1/credit/proposal")
-    def morpho_credit_proposal(body: dict[str, object]) -> dict[str, object]:
-        owner = str(body.get("wallet", "")); collateral_amount = int(body.get("collateral_amount_atomic", 0)); requested = int(body.get("desired_usdc_atomic", 0))
-        if not owner or collateral_amount <= 0 or requested <= 0: raise HTTPException(status_code=400, detail="wallet, collateral amount and desired USDC are required")
-        rpc = os.environ.get("BASE_RPC_URL", "")
-        if not rpc: raise HTTPException(status_code=503, detail="BASE_RPC_URL is required")
-        try: market = discover_qualified_market(rpc)
-        except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
-        state = market_state("https://api.morpho.org", market["market_id"])
-        oracle_price = verified_oracle_price(rpc, market["oracle_address"])
-        market["_available"] = state["available_liquidity"]
-        risk = morpho_proposal(market, collateral_amount, int(body.get("collateral_decimals", 8)), Decimal(oracle_price) / Decimal(10**36), 6, requested, int(body.get("reserve_bps", 2000)))
-        return {"wallet": owner, "market": market, "market_state": state, "oracle_price_1e36": oracle_price, "risk": risk, "provenance": "https://api.morpho.org/v1/blue/markets"}
+    def credit_proposal(body: dict[str, Any]) -> dict[str, Any]:
+        _reject_protocol_inputs(body)
+        wallet = _wallet(body); requested = int(body.get("desired_usdc_atomic", 0))
+        if requested <= 0: raise HTTPException(status_code=400, detail="desired_usdc_atomic must be positive")
+        market = _market(); position = _snapshot(market, wallet)
+        collateral = int(body.get("collateral_amount_atomic") or position["collateral_balance_atomic"] or position["collateral_position_atomic"])
+        if collateral <= 0: raise HTTPException(status_code=400, detail="wallet has no NVDAc collateral")
+        position["collateral_position_atomic"] = collateral
+        risk = _risk(market, position, requested, int(body.get("reserve_bps", 2_000)))
+        return {"wallet": wallet, "market": market, "position": position, "risk": risk, "mission_state": "BORROWED" if position["borrow_shares"] else ("PROPOSED" if risk["state"] == "PROPOSED" else risk["state"]), "provenance": market.get("provenance", {})}
 
     @app.get("/v1/morpho/nvda-markets")
-    def morpho_markets() -> dict[str, object]:
-        try:
-            markets = discover_nvda_markets()
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return {"chain_id": 8453, "collateral": "0xb20000000000000000000078ee7ce2fE4908108C", "markets": markets}
+    def morpho_markets() -> dict[str, Any]:
+        market = _market()
+        return {"chain_id": 8453, "collateral": CANONICAL_COLLATERAL, "selected_market_id": market["market_id"], "markets": [market]}
 
     @app.get("/v1/morpho/market")
-    def morpho_market() -> dict[str, object]:
-        rpc = os.environ.get("BASE_RPC_URL", "")
-        if not rpc: raise HTTPException(status_code=503, detail="BASE_RPC_URL is required")
-        try: market = discover_qualified_market(rpc)
-        except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"chain_id": 8453, "market": market, "source": "https://api.morpho.org/v1/blue/markets"}
-
-    _missions = MissionStore()
+    def morpho_market() -> dict[str, Any]:
+        market = _market(); return {"chain_id": 8453, "market": market, "source": market["provenance"]}
 
     @app.post("/v1/missions")
-    def create_mission(body: dict[str, object]) -> dict[str, object]:
-        market_id = str(body.get("market_id", ""))
-        owner = str(body.get("owner", ""))
-        if not market_id or not owner:
-            raise HTTPException(status_code=400, detail="owner and market_id are required")
-        mission = Mission(str(uuid.uuid4()), owner, MissionState.PROPOSED, market_id, dict(body.get("policy", {})), dict(body.get("snapshot", {})))
-        return asdict(_missions.save(mission))
+    def create_mission(body: dict[str, Any]) -> dict[str, Any]:
+        _reject_protocol_inputs(body)
+        owner = _wallet(body); market = _market(); position = _snapshot(market, owner)
+        policy = dict(body.get("policy") or {})
+        state = MissionState.BORROWED if position["borrow_shares"] else (MissionState.BORROW_READY if market["available_liquidity"] else MissionState.WAITING_FOR_LIQUIDITY)
+        mission = Mission(str(uuid.uuid4()), owner, state, LOCKED_MARKET_ID, policy, {"market": market, "position": position})
+        _missions.save(mission); _missions.snapshot(mission.id, "market", market); _missions.snapshot(mission.id, "position", position); _missions.event(mission.id, "MISSION_CREATED", {"state": state.value, "source": "Base RPC"})
+        return {**mission.__dict__, "state": mission.state.value}
+
+    @app.get("/v1/missions")
+    def list_missions(wallet: str) -> dict[str, Any]:
+        _wallet({"wallet": wallet})
+        missions = _missions.by_owner(wallet)
+        return {"wallet": wallet, "missions": [{**mission.__dict__, "state": mission.state.value, "actions": _missions.actions(mission.id)} for mission in missions]}
 
     @app.get("/v1/missions/{mission_id}")
-    def get_mission(mission_id: str) -> dict[str, object]:
+    def get_mission(mission_id: str) -> dict[str, Any]:
         mission = _missions.get(mission_id)
-        if mission is None:
-            raise HTTPException(status_code=404, detail="mission not found")
-        return asdict(mission)
+        if not mission: raise HTTPException(status_code=404, detail="mission not found")
+        return {**mission.__dict__, "state": mission.state.value, "actions": _missions.actions(mission_id)}
+
+    @app.post("/v1/missions/{mission_id}/refresh")
+    @app.get("/v1/missions/{mission_id}/risk")
+    def refresh_mission(mission_id: str) -> dict[str, Any]:
+        try: mission = reconcile_live(_missions, mission_id, MORPHO_API, _rpc())
+        except Exception as exc: raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"mission_id": mission_id, "state": mission.state.value, "snapshot": mission.snapshot}
+
+    @app.get("/v1/missions/{mission_id}/status")
+    def mission_status(mission_id: str) -> dict[str, Any]:
+        mission = _missions.get(mission_id)
+        if not mission: raise HTTPException(status_code=404, detail="mission not found")
+        return {"mission_id": mission_id, "state": mission.state.value, "snapshot": mission.snapshot}
 
     @app.get("/v1/missions/{mission_id}/timeline")
-    def mission_timeline(mission_id: str) -> dict[str, object]:
-        if _missions.get(mission_id) is None: raise HTTPException(status_code=404, detail="mission not found")
-        return {"mission_id": mission_id, "events": _missions.timeline(mission_id)}
+    @app.get("/v1/missions/{mission_id}/evidence")
+    def mission_timeline(mission_id: str) -> dict[str, Any]:
+        if not _missions.get(mission_id): raise HTTPException(status_code=404, detail="mission not found")
+        return {"mission_id": mission_id, "events": _missions.timeline(mission_id), "snapshots": _missions.snapshots(mission_id), "actions": _missions.actions(mission_id)}
+
+    @app.get("/v1/missions/{mission_id}/actions")
+    def mission_actions(mission_id: str) -> dict[str, Any]:
+        if not _missions.get(mission_id): raise HTTPException(status_code=404, detail="mission not found")
+        return {"mission_id": mission_id, "actions": _missions.actions(mission_id)}
+
+    @app.get("/v1/missions/{mission_id}/action-requirements")
+    def action_requirements(mission_id: str) -> dict[str, Any]:
+        mission = _missions.get(mission_id)
+        if not mission: raise HTTPException(status_code=404, detail="mission not found")
+        position = mission.snapshot.get("position", {})
+        return {"mission_id": mission_id, "state": mission.state.value, "requirements": {"borrow_shares": int(position.get("borrow_shares", 0)), "withdrawal_allowed": int(position.get("borrow_shares", 0)) == 0, "fresh_reconciliation_required": True}, "actions": _missions.actions(mission_id)}
+
+    @app.post("/v1/missions/{mission_id}/actions/{action_key}/submit")
+    def submit_action(mission_id: str, action_key: str, body: dict[str, Any]) -> dict[str, Any]:
+        if not _missions.get(mission_id): raise HTTPException(status_code=404, detail="mission not found")
+        tx_hash = str(body.get("tx_hash", ""))
+        if not tx_hash.startswith("0x") or len(tx_hash) != 66: raise HTTPException(status_code=400, detail="a 32-byte transaction hash is required")
+        action = _missions.get_action(action_key)
+        if not action or action["mission_id"] != mission_id: raise HTTPException(status_code=404, detail="action not found")
+        if action["status"] == "CONFIRMED": return action
+        result = _missions.update_action(action_key, status="SUBMITTED", tx_hash=tx_hash, evidence={"submitted": True, "postcondition_verified": False})
+        _missions.event(mission_id, "TX_SUBMITTED", {"idempotency_key": action_key, "tx_hash": tx_hash})
+        return result
 
     @app.post("/v1/missions/{mission_id}/plan/{action}")
-    def action_plan(mission_id: str, action: str, body: dict[str, object]) -> dict[str, object]:
+    def action_plan(mission_id: str, action: str, body: dict[str, Any], idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")) -> dict[str, Any]:
+        _reject_protocol_inputs(body)
         mission = _missions.get(mission_id)
-        if mission is None: raise HTTPException(status_code=404, detail="mission not found")
-        markets = discover_nvda_markets()
-        market = next((m for m in markets if m["market_id"] == mission.market_id), None)
-        if market is None: raise HTTPException(status_code=409, detail="persisted market is no longer discoverable")
-        return borrower_action_plan(MORPHO_BLUE_BASE, mission.market_id, action, wallet=mission.owner, amount=int(body.get("amount", 0)), market=market)
+        if not mission: raise HTTPException(status_code=404, detail="mission not found")
+        normalized = {"supplyCollateral": "supply", "withdrawCollateral": "withdraw"}.get(action, action)
+        key = str(body.get("idempotency_key") or idempotency_key or f"{mission_id}:{action}:{body.get('amount', 0)}")
+        existing = _missions.get_action(key)
+        if existing:
+            if existing["mission_id"] != mission_id or existing["action"] != normalized:
+                raise HTTPException(status_code=409, detail="idempotency key is already bound to a different action")
+            return existing
+        market = _market(); amount = int(body.get("amount", 0))
+        if amount <= 0 and normalized != "withdraw": raise HTTPException(status_code=400, detail="amount must be positive")
+        pre_position = _snapshot(market, mission.owner)
+        if normalized == "withdraw":
+            position = pre_position
+            if position["borrow_shares"]: raise HTTPException(status_code=409, detail="withdrawal gated until borrow shares are zero")
+            plan = withdraw_plan(MORPHO_BLUE_BASE, mission.market_id, wallet=mission.owner, market=market, collateral_amount=amount or position["collateral_position_atomic"])
+        else:
+            plan = borrower_action_plan(MORPHO_BLUE_BASE, mission.market_id, normalized, wallet=mission.owner, amount=amount, market=market)
+        plan["pre_position"] = pre_position
+        result = _missions.action(key, mission_id, normalized, plan, status="READY", evidence={"pre_position": pre_position})
+        mission.plan = plan
+        _missions.save(mission)
+        return result
 
     @app.post("/v1/morpho/lender-plan")
-    def lender_plan(body: dict[str, object]) -> dict[str, object]:
-        rpc = os.environ.get("BASE_RPC_URL", "")
-        if not rpc: raise HTTPException(status_code=503, detail="BASE_RPC_URL is required")
-        try: market = discover_qualified_market(rpc)
-        except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if market is None: raise HTTPException(status_code=404, detail="verified NVDAc/USDC market unavailable")
-        return lender_supply_plan(MORPHO_BLUE_BASE, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", market["market_id"], int(body["amount"]), wallet=str(body["wallet"]), market=market)
+    def lender_plan(body: dict[str, Any]) -> dict[str, Any]:
+        _reject_protocol_inputs(body)
+        wallet = _wallet(body); amount = int(body.get("amount", 0))
+        if amount <= 0: raise HTTPException(status_code=400, detail="amount must be positive")
+        market = _market(); plan = lender_supply_plan(MORPHO_BLUE_BASE, USDC_BASE, market["market_id"], amount, wallet=wallet, market=market)
+        return {"idempotency_key": f"lender:{wallet.lower()}:{market['market_id']}:{amount}", "status": "READY", **plan}
 
+    @app.post("/v1/missions/{mission_id}/repay-close")
+    def prepare_full_repay(mission_id: str, body: dict[str, Any] | None = None, idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")) -> dict[str, Any]:
+        _reject_protocol_inputs(body or {})
+        mission = _missions.get(mission_id)
+        if not mission: raise HTTPException(status_code=404, detail="mission not found")
+        requested_key = str((body or {}).get("idempotency_key") or idempotency_key or "")
+        if requested_key:
+            existing = _missions.get_action(requested_key)
+            if existing:
+                if existing["mission_id"] != mission_id or existing["action"] != "full-repay":
+                    raise HTTPException(status_code=409, detail="idempotency key is already bound to a different action")
+                return existing
+        market = _market(); position = _snapshot(market, mission.owner); shares = int(position["borrow_shares"])
+        if shares <= 0: raise HTTPException(status_code=409, detail="position has no borrow shares")
+        debt = int(position["debt_assets_atomic"]); approval = debt + max(1, debt // 100) + 1
+        plan = full_repay_plan(MORPHO_BLUE_BASE, mission.market_id, wallet=mission.owner, market=market, borrow_shares=shares, approval_amount=approval)
+        plan["pre_position"] = position
+        key = requested_key or f"{mission_id}:full-repay:{shares}"
+        result = _missions.action(key, mission_id, "full-repay", plan, evidence={"pre_position": position})
+        mission.plan = plan
+        _missions.save(mission)
+        return result
 
-def _market_from_request(request: ProposalRequest) -> AaveMarket:
-    return AaveMarket(
-        collateral=TokenRef(
-            symbol=request.collateral_symbol,
-            address=request.collateral_address,
-            decimals=request.collateral_decimals,
-            source=request.provenance_source,
-        ),
-        debt_asset=TokenRef(
-            symbol=request.debt_symbol,
-            address=request.debt_address,
-            decimals=request.debt_decimals,
-            source=request.provenance_source,
-        ),
-        pool=request.aave_pool,
-        protocol_data_provider=request.aave_data_provider,
-        ltv_bps=request.aave_ltv_bps,
-        liquidation_threshold_bps=request.aave_liquidation_threshold_bps,
-        liquidation_bonus_bps=request.aave_liquidation_bonus_bps,
-        borrow_apr_bps=request.aave_borrow_apr_bps,
-        available_liquidity_atomic=request.aave_available_liquidity_atomic,
-        collateral_price_usd=Decimal(request.collateral_price_usd),
-        debt_price_usd=Decimal(request.debt_price_usd),
-        active=request.aave_active,
-        frozen=request.aave_frozen,
-        paused=request.aave_paused,
-        borrowing_enabled=request.aave_borrowing_enabled,
-        collateral_enabled=request.aave_collateral_enabled,
-        provenance={"market": request.provenance_source},
-    )
+    @app.post("/v1/missions/{mission_id}/reconcile")
+    def reconcile(mission_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        tx_hash = str(body.get("tx_hash", "")); key = body.get("idempotency_key")
+        if not tx_hash: raise HTTPException(status_code=400, detail="tx_hash is required")
+        try: mission = reconcile_receipt(_missions, mission_id, tx_hash, _rpc(), str(key) if key else None)
+        except Exception as exc: raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"mission_id": mission_id, "state": mission.state.value, "tx_hash": mission.tx_hash, "snapshot": mission.snapshot, "timeline": _missions.timeline(mission_id)}
 
-
-def _policy_from_request(request: ProposalRequest) -> CreditPolicy:
-    return CreditPolicy(
-        requested_debt_atomic=request.requested_debt_atomic,
-        max_ltv_bps=request.max_ltv_bps,
-        min_health_factor_bps=request.min_health_factor_bps,
-        reserve_bps=request.reserve_bps,
-        max_borrow_apr_bps=request.max_borrow_apr_bps,
-    )
+    # Serve the frozen landing surface from the same deployable service. API
+    # routes above remain authoritative; this catch-all handles frontend paths.
+    app.mount("/", StaticFiles(directory=str(ROOT / "frontend"), html=True), name="frontend")

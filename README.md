@@ -11,11 +11,12 @@ The product does not predict stocks or invent trades. It reads real market/proto
 - M0 repository/source of truth: **COMPLETE**
 - M1 bounded contract state machine: **COMPLETE** — 24 Foundry tests passed on the locked contract milestone
 - M2 real Base-mainnet B20 buy/sell: **IN PROGRESS**
-- M2C Aave/B20 credit backend: **IN PROGRESS**
+- M2C Morpho Blue/B20 credit backend: **MAINNET READS VERIFIED**
+- Credit mission API, durable reconciliation, live landing surface and position workspace: **IMPLEMENTED LOCALLY**
 
 M2 has already verified Base mainnet RPC access, the configured official NVDAc contract and Chainlink feeds. The original 0x route was blocked by provider-side RWA authorization, so the dated PRD decision switches only the execution adapter to **1inch Classic Swap**, which supports Coinbase Tokenized Stocks on Base. The vault security boundary remains one immutable execution target plus exact temporary allowance and post-balance checks.
 
-The next irreversible gates are a tiny real Base-mainnet USDC ↔ B20 round trip through a deployed Segue vault and a live Aave/B20 credit-market proof. Do not treat provider quotes, static docs, or simulations as that proof.
+The original M2 vault trading path still requires its separate 1inch key, deployment and funded trade evidence. The credit rail has a separate real Base-mainnet proof: NVDAc collateral is supplied and 1 USDC is borrowed in Morpho Blue market `0x91360eea2686ef7ce4966b4e82cf6ff712af02baf0f7211459780d9f5af1612a`. The API reads that position directly from Base and Morpho, and never treats a quote or simulation as execution proof.
 
 ## Core loop
 
@@ -28,7 +29,7 @@ A later action is not active until the prior action or risk condition is verifie
 - Coinbase B20 contracts are the assets Segue trades.
 - Chainlink total-return feeds are the trigger/valuation truth.
 - 1inch Classic Swap supplies routing calldata; the vault independently validates the economic result.
-- Aave Base markets supply credit parameters where B20 collateral borrowing is used.
+- Morpho Blue on Base supplies credit parameters where NVDAc collateral borrowing is used; the locked MarketParams and oracle are revalidated on every live read.
 - Base contract state is authoritative for policies, balances and execution history.
 
 B20 tokens may trade while an equity total-return feed is outside its update window. Segue fails closed on stale feed data rather than pretending a trigger is current.
@@ -38,6 +39,11 @@ B20 tokens may trade while an equity total-return feed is outside its update win
 Built for the **Base Builder Quest — Tokenized Stocks**.
 
 The authoritative build contract is `PRD.md`; implementation discipline is in `BUILD_RULES.md` and `AGENTS.md`.
-Segue is an autopilot for tokenized-stock positions: unlock liquidity without selling, or program what your portfolio should do next, while Segue enforces the user's bounded policy after they leave.
+Segue is an autopilot for tokenized-stock positions: unlock liquidity without selling, or program what your portfolio should do next, while Segue enforces the user's bounded policy after they leave. Credit, Treasury and Policy are one system: the API reads a position, calculates a safe action, prepares a bounded transaction, records evidence, and advances the next policy step only after provider postconditions are proven.
 
 The credit mission uses Morpho Blue on Base; the original dependent stock-sequence system remains the policy and treasury execution layer.
+
+The unified FastAPI service serves the landing page at `/` and the recoverable
+live position workspace at `/app.html`. The workspace reads borrower, market,
+oracle, risk, mission and evidence state from the API and prepares unsigned
+close actions; it never signs or broadcasts transactions.

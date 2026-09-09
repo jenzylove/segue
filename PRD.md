@@ -4,8 +4,8 @@
 **Tagline:** Program what your portfolio does next.  
 **Hackathon:** Base Builder Quest — Tokenized Stocks  
 **Target network:** Base mainnet  
-**Current repository baseline for this revision:** `414916b539f2d360c0caefa43e729e8e6de940e7`  
-**Current build state:** M1 contract state machine complete; M2 production-path tooling locally audited and hardened on 2026-09-07; 2026-09-08 product pivot adds B20-backed credit missions while preserving Segue's sequenced policy model; real Base-mainnet B1–B4 and Aave credit evidence still required.
+**Current repository baseline for this revision:** `589fd0c61075f712b876c3f7e847c248de52b357`
+**Current build state:** M1 contract state machine complete; the original M2 vault buy/sell path remains protected by its provider/funding gates; the Morpho Blue B20 credit mission is implemented and has a real Base-mainnet read/borrow proof; the current API, worker and landing surface use live Morpho state.
 **Source of truth:** This PRD is the product/build contract. `BUILD_RULES.md`, `AGENTS.md`, `docs/INTEGRATIONS.md`, `docs/ARCHITECTURE.md`, and milestone-specific docs are subordinate execution documents.
 
 ---
@@ -27,6 +27,7 @@ Do not change these for convenience:
 - The automation worker pays gas/attempts execution but may not withdraw user funds or rewrite a policy.
 - Chainlink total-return feeds are trigger/valuation truth for supported B20 assets.
 - 1inch Classic Swap is the current production routing path after the verified 0x RWA blocker.
+- Morpho Blue is the verified credit rail for NVDAc-backed USDC borrowing on Base.
 - Base chain state is authoritative for ownership, policy state, balances, and execution state.
 - PostgreSQL is an index/cache/history layer, never the authority for whether an onchain policy exists.
 - No fake market data, fake trades, fake hashes, or frontend-only state may be presented as production evidence.
@@ -79,7 +80,7 @@ The user decides the policy. Segue executes only when the user's precommitted co
 
 Credit example:
 
-> I own NVDAc on Base and want 20 USDC without selling it. Use the safest supported Aave market, keep the position above my health-factor buffer, reserve enough USDC for emergency repayment, and if risk deteriorates, repay from reserve before asking me for approval.
+> I own NVDAc on Base and want 20 USDC without selling it. Use the locked Morpho Blue market, keep the position above my health-factor buffer, reserve enough USDC for emergency repayment, and if risk deteriorates, prepare a share-based repay before asking me for approval.
 
 Sequenced trading example:
 
@@ -96,15 +97,16 @@ The hackathon narrative now centers on **B20-backed credit missions**:
 `B20 collateral -> safe borrow -> monitored credit mission -> sequenced repay/de-risk action`
 
 The original stock-routing vault remains part of the architecture for B20
-acquisition and sequenced follow-up actions, but the primary user promise is:
+acquisition and sequenced follow-up actions, while the Morpho credit mission is
+the second product path. The combined user promise is:
 
 **Keep the stock. Unlock USDC liquidity. Let Segue enforce what happens next.**
 
 This pivot is allowed by the user and recorded here because Base publicly frames
 Coinbase Tokenized Stocks as composable DeFi assets, including lending/borrowing
 and credit/yield use cases. The pivot does not permit fake integrations, guessed
-addresses, unsafe wallet authority, or a claim that Aave credit is verified until
-real Base/Aave evidence is captured.
+addresses, unsafe wallet authority, or a claim that Morpho credit is verified
+until real Base/Morpho evidence is captured.
 
 ## 1.1 Problem
 
@@ -186,8 +188,7 @@ Do not add unless the core path is finished and there is a specific approved rea
 - AI stock picking or autonomous recommendations;
 - chat-first trading;
 - social/copy trading;
-- lending/borrowing;
-- leverage/derivatives;
+- unbounded leverage/derivatives;
 - governance/token issuance;
 - cross-chain routing/deposits;
 - fiat onramp;
@@ -720,7 +721,9 @@ Never place these in frontend bundles, commits, docs, screenshots, logs, or chat
 
 # 11. Persistence and indexing
 
-PostgreSQL is required for restart-safe indexing/history and UX, but the chain remains authoritative.
+The current implementation uses a durable SQLite index for restart-safe
+mission/action history and UX. PostgreSQL can replace that index at deployment
+scale, but the chain remains authoritative.
 
 The exact schema may evolve during implementation. It should be sufficient to represent the following conceptual records.
 
@@ -1236,10 +1239,11 @@ Every milestone ends with:
 | M0 Repo/source of truth | **COMPLETE** | PRD/build rules/agent instructions/docs/env/CI baseline |
 | M1 Contract state machine | **COMPLETE** | `615b1908856670601e2d9ae05fc1d4ec52cc66f8`; Foundry build + 24 tests |
 | M2 Real Base-mainnet buy/sell | **IN PROGRESS — tooling audited** | Route/deploy/vault/policy/condition/snapshot tooling passes local audit; B1–B4 still require protected provider/mainnet execution |
-| M3 Autonomous worker | NOT STARTED | Deployed/restart-safe worker; B5–B6 |
-| M4 Persistence/history/multi-user | NOT STARTED | PostgreSQL + recovery/isolation; B7–B9 |
-| M5 Trading frontend | NOT STARTED | Real data/browser flow |
-| M6 Production deployment/evidence | NOT STARTED | public frontend/worker + Builder Code + B10–B11 |
+| M2C Morpho Blue credit mission | **MAINNET PROOF / SIGNATURE READY** | Locked NVDAc/USDC market, real collateral + borrow evidence, live proposal/risk, unsigned close path |
+| M3 Autonomous worker | **IMPLEMENTED LOCALLY** | Live Morpho reads, receipt/postcondition reconciliation, retry/idempotency; public worker host still requires deployment credentials |
+| M4 Persistence/history/multi-user | **IMPLEMENTED LOCALLY** | Durable SQLite missions/actions/snapshots/timeline and restart recovery; PostgreSQL scale-out remains future work |
+| M5 Trading frontend | **IMPLEMENTED LOCALLY** | Frozen landing surface and `/app.html` position workspace read live Morpho position/risk/liquidity/evidence in browser |
+| M6 Production deployment/evidence | **PREPARED** | Docker/unified FastAPI service and deployment runbook; public host + Builder Code evidence remain credential/funding work |
 | M7 Submission | NOT STARTED | B12 + final docs/demo/freeze |
 
 ## 22.1 M2 current exact handoff state
@@ -1288,7 +1292,8 @@ Stop condition: B5–B6 with real deployed evidence.
 
 Required outcome:
 
-- PostgreSQL-backed indexing/checkpoints;
+- durable SQLite-backed indexing/checkpoints for the current single-instance API;
+- PostgreSQL adapter for multi-instance scale-out (optional deployment upgrade);
 - restart-safe reconciliation;
 - queryable execution history/evidence;
 - two-wallet isolation demonstration;
@@ -1455,6 +1460,16 @@ M2 tooling separates the user/demo-owner wallet from the gas-only executor. Do n
 
 M2 records block number, git SHA, owner/executor, policy/current-step state, deployed-cap state, and vault USDC/B20 balances before/after real actions so mainnet completion is evidence-based rather than narrative.
 
+## 2026-09-09 — Morpho Blue credit mission proof
+
+Morpho Blue is the active credit rail for the B20 mission. The locked Base
+market is `0x91360eea2686ef7ce4966b4e82cf6ff712af02baf0f7211459780d9f5af1612a`.
+The reference wallet has `2,323,053` NVDAc atomic collateral and
+`1,000,000,000,000` borrow shares; the approval, collateral-supply and borrow
+transactions are recorded in the durable evidence index. The mission API uses
+the direct Morpho oracle and share-based close semantics. This credit proof does
+not close the separate 1inch vault buy/sell gates.
+
 ---
 
 # 27. Final definition of done
@@ -1465,6 +1480,7 @@ Segue is complete for submission only when all required items are true:
 - [x] build rules and agent instructions exist;
 - [x] bounded contract state machine is locally verified;
 - [x] M2 real-path scripts/evidence tooling are prepared;
+- [x] Morpho Blue NVDAc/USDC credit mission has a real Base-mainnet reference position and signature-ready full-close path;
 - [ ] current 1inch B20 firm route is live-verified;
 - [ ] contracts are deployed to Base mainnet;
 - [ ] deployed registry contains verified official assets/feeds;
@@ -1474,7 +1490,8 @@ Segue is complete for submission only when all required items are true:
 - [ ] autonomous worker is deployed;
 - [ ] browser can be closed while a real step executes;
 - [ ] real dependent step 2 activates only after step 1;
-- [ ] PostgreSQL/indexing/restart recovery work;
+- [x] SQLite mission/action indexing and restart recovery for the current credit path;
+- [ ] PostgreSQL multi-instance scale-out;
 - [ ] worker cannot escape stored limits;
 - [ ] second-wallet isolation is demonstrated;
 - [ ] state recovers without localStorage;

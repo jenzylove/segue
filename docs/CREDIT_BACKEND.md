@@ -18,49 +18,45 @@ The backend must never invent lending parameters, token addresses, prices, healt
 factors, liquidity or receipts. If a critical read is unavailable, return
 `BLOCKED`.
 
-## Official Aave Base deployment source
+## Verified Morpho Blue Base deployment
 
-Use the official Aave address book:
+The active credit rail is Morpho Blue. The official deployment registry is
+https://docs.morpho.org/developers/contracts/addresses/.
 
-https://github.com/aave-dao/aave-address-book/blob/main/src/AaveV3Base.sol
-
-Current fields to place in local `.env`:
-
-```dotenv
-AAVE_POOL_ADDRESSES_PROVIDER=0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D
-AAVE_POOL_ADDRESS=0xA238Dd80C259a72e81d7e4664a9801593F98d1c5
-AAVE_PROTOCOL_DATA_PROVIDER=0x0F43731EB8d45A581f4a36DD74F5f358bc90C73A
-AAVE_DEPLOYMENT_SOURCE=https://github.com/aave-dao/aave-address-book/blob/main/src/AaveV3Base.sol
+```text
+Morpho Blue:    0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
+AdaptiveCurveIRM: 0x46415998764C29aB2a25CbeA6254146D50D22687
+Locked market:  0x91360eea2686ef7ce4966b4e82cf6ff712af02baf0f7211459780d9f5af1612a
 ```
 
-These values are public. Keep `BASE_RPC_URL` private and local.
+The backend verifies Morpho bytecode, enabled IRM, direct `idToMarketParams`,
+the selected oracle `price()` and the Morpho API oracle state on every live
+qualification. Keep `BASE_RPC_URL` private and local.
 
 ## Read-only preflight
 
 Run from the repository root:
 
 ```powershell
-python scripts\equityline_aave_preflight.py
+python scripts\equityline_morpho_preflight.py
 ```
 
-The script loads `.env`, verifies Base chain id, verifies the Aave deployment
-contracts have bytecode, reads the Aave oracle, reads reserve configuration for
-the configured B20 and USDC assets, checks debt liquidity, and prints only public
-market facts.
+The script loads `.env`, queries Morpho Blue's public market index, locks the
+selected market, verifies its Base bytecode and MarketParams, compares the live
+oracle state with direct `price()`, and prints only public market facts.
 
 Passing preflight is not transaction evidence. It only means Segue can attempt
 the next phase: user-approved supply/borrow/repay command preparation.
 
 ## Unsigned transaction planning
 
-`backend/segue_api/tx_plan.py` prepares unsigned transaction objects for:
+`backend/segue_api/morpho_plans.py` prepares unsigned transaction objects for:
 
-- exact B20 collateral approval to the Aave Pool;
-- Aave `supply`;
-- Aave variable-rate USDC `borrow`;
+- exact NVDAc collateral approval to Morpho Blue;
+- Morpho `supplyCollateral` and `borrow`;
 - exact USDC repayment approval;
-- Aave `repay`;
-- Aave `withdraw`.
+- Morpho `repay` by fresh shares for full close;
+- Morpho `withdrawCollateral` after borrow shares reach zero.
 
 The planner first builds the deterministic credit proposal. If the market is
 paused, frozen, not collateral-enabled, not borrow-enabled, too expensive under
@@ -83,9 +79,11 @@ At that point, prepare the exact command and let the human builder run it locall
 ## Morpho discovery preflight
 
 `python scripts/equityline_morpho_preflight.py` queries Morpho's public REST API
-(`https://api.morpho.org/v1/blue/markets`, chain 8453) for the configured
-NVDAc/USDC pair. It prints `MORPHO_PREFLIGHT_OK` only when exactly one listed
-market has verified market id, oracle, IRM, LLTV, nonzero borrow liquidity, and
-current borrow rate. The health check follows Morpho Blue's onchain rule:
-`maxBorrow = collateral * oraclePrice / 1e36 * LLTV` and a position is healthy
-when `maxBorrow >= borrowed`. No borrowing or signing is performed.
+(`https://api.morpho.org/v1/blue/markets`, chain 8453) for canonical NVDAc and
+then qualifies the locked market. The health check follows Morpho Blue's
+onchain rule: `maxBorrow = collateral * oraclePrice / 1e36 * LLTV` and a
+position is healthy when `maxBorrow >= borrowed`. No borrowing or signing is
+performed.
+
+The old Aave preflight and planner remain only as historical compatibility code;
+they are not imported by the active proposal, mission or transaction routes.

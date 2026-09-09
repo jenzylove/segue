@@ -1,8 +1,26 @@
 # Segue — Codex Continuation Handoff
 
 **Purpose:** Fast continuation without product rediscovery.  
-**Baseline before this file:** `b2ede3f3ca754d49b11bfe7b2ab80fc0bfd4d575`  
-**Current milestone:** M2 — prove the real Base-mainnet USDC ↔ Coinbase B20 path and close B1–B4.  
+**Baseline before this continuation:** `589fd0c61075f712b876c3f7e847c248de52b357`
+**Current milestone:** Morpho credit product completion / deployable workspace.
+
+## 2026-09-09 continuation state
+
+The active credit rail is Morpho Blue on Base, not Aave. The locked verified
+market is `0x91360eea2686ef7ce4966b4e82cf6ff712af02baf0f7211459780d9f5af1612a`
+with Base USDC loan token and canonical NVDAc collateral. The reference wallet
+`0x48C8B4D40dE216C652ED4D67f6466CeBA90054CA` has a real onchain position:
+`2,323,053` NVDAc collateral and `1,000,000,000,000` borrow shares (about 1
+USDC debt). Approval, collateral supply and borrow evidence are recorded; the
+borrow hash is `0x341e9afc0ea0a09c81e0e64332f0283257cc5b3727db222d9f0a50b5d50963f5`.
+
+The current FastAPI surface reads Base/Morpho state directly, prepares Morpho
+unsigned calls, persists missions/actions/snapshots/evidence in SQLite, and
+reconciles receipts only after provider postconditions. Full close uses fresh
+borrow shares, then gates collateral withdrawal until shares are zero. The
+landing surface and `/app.html` position workspace consume this API; the
+original B20 sequence vault remains a separate product path and is still
+subject to its own 1inch/deployment/funding evidence gates.
 
 ---
 
@@ -182,19 +200,26 @@ Continue in this order:
 
 ### M3 — autonomous worker
 
-Build/deploy a restart-safe FastAPI worker that reconciles chain state, calls `previewExecution`, requests/validates 1inch only when ready, submits the exact vault step, records evidence, and never retries a confirmed step.
+The Morpho credit worker is implemented locally: it reconciles live market and
+position state, receipts, postconditions and idempotent actions. The remaining
+M3 work is deploying the original 1inch vault worker and capturing its protected
+mainnet evidence.
 
 Must close B5–B6.
 
 ### M4 — persistence/history/multi-user
 
-Add PostgreSQL indexing/checkpoints/evidence, restart recovery, two-wallet isolation proof, and chain-backed browser recovery.
+The current credit path persists missions, actions, snapshots, evidence and
+restart recovery in SQLite. PostgreSQL indexing and two-wallet isolation remain
+scale-out work for the original vault path.
 
 Must close B7–B9.
 
 ### M5 — real frontend
 
-Build the trading product around the real backend/contracts/data:
+The Morpho credit workspace and frozen live landing surface are implemented
+locally against the real backend/contracts/data. The original trading product
+still needs its separate mainnet evidence:
 
 - stock catalogue;
 - stock detail + real market/chart context;
