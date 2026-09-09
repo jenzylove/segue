@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover - keeps domain tests dependency-light.
 
 from .models import AaveMarket, CreditPolicy, TokenRef
 from .risk import build_credit_proposal
+from .morpho import discover_nvda_markets
 
 
 if FastAPI:
@@ -72,6 +73,14 @@ if FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return asdict(proposal)
 
+    @app.get("/v1/morpho/nvda-markets")
+    def morpho_markets() -> dict[str, object]:
+        try:
+            markets = discover_nvda_markets()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"chain_id": 8453, "collateral": "0xb20000000000000000000078ee7ce2fE4908108C", "markets": markets}
+
 
 def _market_from_request(request: ProposalRequest) -> AaveMarket:
     return AaveMarket(
@@ -113,4 +122,3 @@ def _policy_from_request(request: ProposalRequest) -> CreditPolicy:
         reserve_bps=request.reserve_bps,
         max_borrow_apr_bps=request.max_borrow_apr_bps,
     )
-
