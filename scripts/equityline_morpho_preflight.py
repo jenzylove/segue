@@ -61,11 +61,12 @@ def select_market(payload: dict, loan: str, collateral: str) -> dict:
             continue
         if str(market.get("loan_token", "")).lower() == loan.lower():
             matches.append(market)
-    if len(matches) != 1:
+    if not matches:
         raise ValueError(
             f"Morpho Blue has no matching NVDAc market (found {len(matches)}); verify the configured token address"
         )
-    market = matches[0]
+    # Prefer USDC when several markets share the same collateral.
+    market = sorted(matches, key=lambda m: 0 if str(m.get("loan_token", "")).lower() == USDC_DEFAULT.lower() else 1)[0]
     for old, new in (("market_id", "marketId"), ("lltv_wad", "lltv"), ("oracle_address", "oracle"), ("irm_address", "irmAddress")):
         if old in market and new not in market:
             market[new] = market[old]
