@@ -94,7 +94,11 @@ def main() -> int:
         state = fetch_json(f"{api}/v0/blue/markets/{selector}/state").get("data", {})
         apy = fetch_json(f"{api}/v0/blue/markets/{selector}/apy-averages").get("data", {})
         market["_borrow_assets"] = state.get("total_borrow_assets", state.get("borrowAssets", 0))
+        market["_supply_assets"] = state.get("total_supply_assets", state.get("supplyAssets", 0))
+        market["_available"] = max(0, int(market["_supply_assets"]) - int(market["_borrow_assets"]))
         market["_borrow_rate"] = apy.get("borrow_apy_averages", apy.get("borrowApy"))
+        if market["_available"] <= 0:
+            raise ValueError("selected Morpho Blue market has zero available borrow liquidity")
     except Exception as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
         return 2
@@ -106,7 +110,7 @@ def main() -> int:
     print(f"oracle={market['oracle']}")
     print(f"irm={market['irmAddress']}")
     print(f"lltv={market['lltv']}")
-    print("available_borrow_liquidity_atomic=UNVERIFIED")
+    print(f"available_borrow_liquidity_atomic={market['_available']}")
     print(f"current_borrow_rate={market['_borrow_rate']}")
     print("health_formula=max_borrow = collateral * oracle_price / 1e36 * lltv; healthy iff max_borrow >= borrowed")
     return 0
