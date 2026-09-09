@@ -27,12 +27,12 @@ def load_env(path: Path) -> None:
 def fetch_markets(base_url: str, loan: str, collateral: str) -> dict:
     # The public REST endpoint's token filters vary by API version; chain/listing
     # filters are stable, so verify the exact token pair locally from the response.
-    query = urlencode({"chain_id": "8453", "limit": "100"})
+    query = urlencode({"chain_id": "8453", "collateral_token": collateral, "limit": "100"})
     all_items = []
     cursor = None
     for _ in range(20):
         suffix = f"&cursor={cursor}" if cursor else ""
-        request = Request(f"{base_url.rstrip('/')}/v0/midnight/markets?{query}{suffix}", headers={"accept": "application/json"})
+        request = Request(f"{base_url.rstrip('/')}/v1/blue/markets?{query}{suffix}", headers={"accept": "application/json"})
         with urlopen(request, timeout=20) as response:
             page = json.loads(response.read().decode("utf-8"))
         all_items.extend(page.get("data", []))
@@ -57,18 +57,13 @@ def select_market(payload: dict, loan: str, collateral: str) -> dict:
     for market in items:
         if not isinstance(market, dict):
             continue
-        if str(market.get("loan_token", market.get("loanToken", ""))).lower() != loan.lower():
+        if str(market.get("collateral_token", "")).lower() != collateral.lower():
             continue
-        coll = next((c for c in market.get("collaterals", []) if str(c.get("token", "")).lower() == collateral.lower()), None)
-        if not coll:
-            continue
-        if int(market.get("total_units", 0) or 0) > 0 and int(market.get("maturity", 0)) > 0:
-            market["_collateral"] = coll
+        if str(market.get("loan_token", "")).lower() == loan.lower():
             matches.append(market)
     if len(matches) != 1:
         raise ValueError(
-            f"Morpho Midnight has no matching borrowable NVDAc/USDC market (found {len(matches)}); "
-            "verify the configured token address against Morpho's live tokenized-stock catalogue"
+            f"Morpho Blue has no matching NVDAc market (found {len(matches)}); verify the configured token address"
         )
     market = matches[0]
     for old, new in (("market_id", "marketId"), ("lltv_wad", "lltv"), ("oracle_address", "oracle"), ("irm_address", "irmAddress")):
@@ -100,10 +95,10 @@ def main() -> int:
     print(f"market_id={market['marketId']}")
     print(f"loan_token={loan}")
     print(f"collateral_token={collateral}")
-    print(f"oracle={_address(market['_collateral']['oracle'])}")
-    print("irm=midnight")
-    print(f"lltv={market['_collateral']['lltv']}")
-    print(f"available_borrow_liquidity_atomic={market.get('total_units')}")
+    print(f"oracle={market['oracle']}")
+    print(f"irm={market['irmAddress']}")
+    print(f"lltv={market['lltv']}")
+    print("available_borrow_liquidity_atomic=UNVERIFIED")
     print(f"current_borrow_rate={market['_borrow_rate']}")
     print("health_formula=max_borrow = collateral * oracle_price / 1e36 * lltv; healthy iff max_borrow >= borrowed")
     return 0
