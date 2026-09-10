@@ -2,8 +2,10 @@ name: One-shot live demo UX hotfix
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
+      - scripts/hotfix_demo.py
       - .github/workflows/hotfix-demo-ux.yml
 
 permissions:
@@ -18,108 +20,19 @@ jobs:
           ref: main
 
       - name: Patch demo journey
-        shell: bash
+        run: python scripts/hotfix_demo.py
+
+      - name: Check browser JavaScript syntax
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path('frontend/app.html')
-          text = path.read_text(encoding='utf-8')
-
-          old_badge = "const setWalletBadge = (address, isDemo = false) => { const badge = $('wallet-badge'); badge.hidden = !address; badge.classList.toggle('demo', Boolean(isDemo)); set('wallet-badge-text', isDemo ? `Live demo · ${shortAddress(address)}` : shortAddress(address)); $('disconnect').hidden = !address; };"
-          new_badge = "const setWalletBadge = (address, isDemo = false) => { const badge = $('wallet-badge'); badge.hidden = !address; badge.classList.toggle('demo', Boolean(isDemo)); set('wallet-badge-text', isDemo ? `Live demo · ${shortAddress(address)}` : shortAddress(address)); $('disconnect').hidden = !address || isDemo; };"
-          if old_badge not in text:
-              raise SystemExit('wallet badge anchor not found')
-          text = text.replace(old_badge, new_badge, 1)
-
-          start = text.find('      function renderPortfolio(data) {')
-          end = text.find('      function renderSummary(', start)
-          if start < 0 or end < 0:
-              raise SystemExit('portfolio render block not found')
-
-          replacement = r'''      function demoCollateralFor(asset) {
-        if (!demoMode || asset.ticker !== 'NVDAc') return 0;
-        return Number(state?.position?.collateral_position_atomic || 0);
-      }
-      function humanTokenAmount(atomic, decimals = 8) {
-        return Number(atomic || 0) / (10 ** Number(decimals || 0));
-      }
-      function renderPortfolio(data) {
-        portfolioState = data;
-        const assets = data.assets || [];
-        const root = $('portfolio-assets');
-        const selector = $('market-asset-selector');
-        if (demoMode) set('portfolio-subtitle', 'Live demo position + official Coinbase Tokenized Stocks on Base');
-        selector.innerHTML = assets.map(asset => `<option value="${asset.address}">${asset.ticker} · ${asset.company}</option>`).join('');
-        selector.onchange = () => renderMarketAsset(selector.value);
-        if (assets.length) renderMarketAsset(selector.value || assets[0].address);
-        if (!assets.length) { root.innerHTML = '<div class="tab-empty">No verified catalogue assets are available right now.<br /><a href="https://brand.base.org/stocks" target="_blank" rel="noreferrer">Open the official Base catalogue ↗</a></div>'; return; }
-        const isPosition = asset => (asset.status === 'LIVE' && Number(asset.balance_atomic || 0) > 0) || demoCollateralFor(asset) > 0;
-        const holdings = assets.filter(isPosition);
-        const catalogueAssets = assets.filter(asset => !isPosition(asset));
-        const card = asset => {
-          const live = asset.status === 'LIVE';
-          const liquidAtomic = Number(asset.balance_atomic || 0);
-          const owned = live && liquidAtomic > 0;
-          const collateralAtomic = demoCollateralFor(asset);
-          const collateralized = collateralAtomic > 0;
-          const decimals = Number(asset.decimals || 8);
-          const collateralHuman = humanTokenAmount(collateralAtomic, decimals);
-          const balance = collateralized ? `${collateralHuman.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${asset.symbol || asset.ticker}` : owned ? `${Number(asset.balance).toLocaleString(undefined, { maximumFractionDigits: 8 })} ${asset.symbol || asset.ticker}` : live ? 'Not held' : 'Read pending';
-          const balanceLabel = collateralized ? `${Number(asset.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 8 })} liquid · collateralized in Morpho` : 'wallet balance · Base mainnet';
-          const status = collateralized ? 'Collateralized · live demo' : live ? owned ? 'Held in wallet' : 'Live balance · not held' : 'Onchain read pending';
-          const sequence = asset.sequence_supported ? 'Sequences supported' : 'Sequence rail pending';
-          const credit = asset.credit_supported ? 'Unlock liquidity' : 'Credit rail not verified';
-          const action = asset.credit_supported && (owned || collateralized) ? `<button class="button button-indigo" type="button" data-open-credit>${collateralized ? 'View live credit' : credit}</button>` : '';
-          const acquire = asset.acquisition_url || asset.provenance || 'https://brand.base.org/stocks';
-          return `<article class="asset-card"><div class="asset-head"><div><div class="asset-symbol">${asset.ticker}</div><div class="asset-company">${asset.company}</div></div><span class="pill${live || collateralized ? '' : ' warn'}">${status}</span></div><div class="asset-balance">${balance}</div><div class="asset-balance-label">${balanceLabel}</div><div class="asset-meta"><span class="${live || collateralized ? 'verified' : ''}">${asset.feed_status}</span><span>${sequence}</span><span>${credit}</span></div><div class="asset-actions">${action}<a class="button button-light" href="${acquire}" target="_blank" rel="noreferrer">Get stock / Trade on Base ↗</a></div>${asset.error ? `<p class="error">Onchain read pending: ${asset.error}</p>` : ''}</article>`;
-        };
-        const positionLabel = demoMode && holdings.length ? 'Live demo positions' : 'Held in this wallet';
-        root.innerHTML = `${holdings.length ? `<div class="catalogue-section-label">${positionLabel}</div>${holdings.map(card).join('')}` : '<div class="tab-empty catalogue-empty"><strong>No supported tokenized stocks found in this wallet.</strong><span>Explore the verified catalogue below to add a supported asset.</span><a class="button button-light" href="https://brand.base.org/stocks" target="_blank" rel="noreferrer">Explore tokenized stocks on Base ↗</a></div>'}<div class="catalogue-section-label">${demoMode ? 'Explore more tokenized stocks' : 'Verified catalogue · capabilities vary by asset'}</div>${catalogueAssets.map(card).join('')}`;
-        root.querySelectorAll('[data-open-credit]').forEach(button => button.addEventListener('click', () => showView('credit')));
-        refreshSequenceBuilderAssets();
-      }
-      function renderMarketAsset(address) {
-        const asset = (portfolioState?.assets || []).find(item => item.address.toLowerCase() === String(address).toLowerCase());
-        if (!asset) { $('market-asset-detail').innerHTML = '<div><b>No asset selected</b><span>Choose a verified stock</span></div>'; return; }
-        const live = asset.status === 'LIVE'; const context = asset.market_context || {};
-        const collateralAtomic = demoCollateralFor(asset);
-        const collateralized = collateralAtomic > 0;
-        const liquid = live ? Number(asset.balance || 0) : 0;
-        const collateralHuman = humanTokenAmount(collateralAtomic, Number(asset.decimals || 8));
-        const balance = collateralized ? `${liquid.toLocaleString(undefined, { maximumFractionDigits: 8 })} liquid · ${collateralHuman.toLocaleString(undefined, { maximumFractionDigits: 8 })} collateralized` : live ? `${liquid.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${asset.ticker}` : 'Balance read pending';
-        const market = context.oracle_price_1e36 ? `$${(Number(context.oracle_price_1e36) / 1e34).toFixed(2)} current oracle` : 'No verified live market context';
-        const sequence = asset.sequence_supported ? 'Sequence supported' : 'Portfolio only';
-        const credit = asset.credit_supported ? (collateralized ? 'Live credit position' : 'Verified NVDAc credit') : 'No verified credit market';
-        $('market-asset-detail').innerHTML = `<div><b>${asset.ticker} · ${asset.company}</b><span class="mono">${asset.address}</span></div><div><b>${balance}</b><span>${collateralized ? 'Live Base position' : 'Connected-wallet balance'}</span></div><div><b>${market}</b><span>${context.oracle_price_1e36 ? 'Direct Base oracle state' : 'No chart or price fabricated'}</span></div><div><b>${sequence}</b><span>${credit}</span></div>`;
-      }
-'''
-          text = text[:start] + replacement + text[end:]
-
-          old_restore = "if (demoMode) { setConnected(DEMO_WALLET, true); await refresh(); return; }"
-          new_restore = "if (demoMode) { setConnected(DEMO_WALLET, true); await refresh(); showView('credit'); return; }"
-          if old_restore not in text:
-              raise SystemExit('demo restore anchor not found')
-          text = text.replace(old_restore, new_restore, 1)
-
-          path.write_text(text, encoding='utf-8')
-          PY
-
-          python - <<'PY'
-          from pathlib import Path
-          text = Path('frontend/app.html').read_text(encoding='utf-8')
-          script = text.split('<script>', 1)[1].split('</script>', 1)[0]
-          Path('/tmp/segue-app.js').write_text(script, encoding='utf-8')
-          PY
+          python -c "from pathlib import Path; t=Path('frontend/app.html').read_text(); Path('/tmp/segue-app.js').write_text(t.split('<script>',1)[1].split('</script>',1)[0])"
           node --check /tmp/segue-app.js
 
-      - name: Commit hotfix and remove one-shot workflow
-        shell: bash
+      - name: Commit hotfix
         run: |
+          rm scripts/hotfix_demo.py
           rm .github/workflows/hotfix-demo-ux.yml
           git config user.name "Segue hotfix"
           git config user.email "actions@users.noreply.github.com"
-          git add frontend/app.html .github/workflows/hotfix-demo-ux.yml
+          git add frontend/app.html scripts/hotfix_demo.py .github/workflows/hotfix-demo-ux.yml
           git commit -m "Fix live demo journey"
           git push origin HEAD:main
