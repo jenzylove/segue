@@ -60,6 +60,9 @@ After the host is live, verify:
 ```text
 GET https://<host>/health
 GET https://<host>/v1/credit/position?wallet=0x48C8B4D40dE216C652ED4D67f6466CeBA90054CA
+GET https://<host>/v1/portfolio?wallet=0x48C8B4D40dE216C652ED4D67f6466CeBA90054CA
+GET https://<host>/v1/sequences?wallet=0x48C8B4D40dE216C652ED4D67f6466CeBA90054CA
+GET https://<host>/v1/activity?wallet=0x48C8B4D40dE216C652ED4D67f6466CeBA90054CA
 GET https://<host>/app.html?demo=1
 ```
 
