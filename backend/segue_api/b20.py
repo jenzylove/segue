@@ -29,6 +29,7 @@ class B20Asset:
     credit_supported: bool
     feed_status: str
     provenance: str = BASE_STOCKS_SOURCE
+    acquisition_url: str = BASE_STOCKS_SOURCE
 
 
 # These five assets are listed by Base's official Coinbase Tokenized Stocks

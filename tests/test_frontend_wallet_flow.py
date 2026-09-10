@@ -10,7 +10,11 @@ class FrontendWalletFlowTests(unittest.TestCase):
     def test_landing_is_wallet_neutral_with_explicit_demo_route(self):
         html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
         self.assertIn('href="app.html?demo=1"', html)
-        self.assertIn("const wallet = demoMode ? DEMO_WALLET : null;", html)
+        self.assertIn('class="button button-indigo js-connect-wallet"', html)
+        self.assertIn("eth_requestAccounts", html)
+        self.assertIn("Live Segue demo · Base mainnet", html)
+        self.assertNotIn("CONNECT WALLET TO VIEW", html)
+        self.assertNotIn("Unavailable", html)
         self.assertEqual(html.count(DEMO_WALLET), 1)
         self.assertIn('rel="icon"', html)
         self.assertTrue((ROOT / "frontend" / "favicon.svg").exists())
@@ -33,6 +37,14 @@ class FrontendWalletFlowTests(unittest.TestCase):
             self.assertIn(label, html)
         self.assertIn("Save sequence draft", html)
         self.assertIn("Official Coinbase Tokenized Stocks on Base", html)
+
+    def test_catalogue_uses_official_acquisition_provenance(self):
+        from backend.segue_api.b20 import BASE_STOCKS_SOURCE, B20_REGISTRY, registry_public
+
+        self.assertEqual(len(B20_REGISTRY), 5)
+        self.assertTrue(all(asset.provenance == BASE_STOCKS_SOURCE for asset in B20_REGISTRY))
+        self.assertTrue(all(asset.acquisition_url == BASE_STOCKS_SOURCE for asset in B20_REGISTRY))
+        self.assertTrue(all(item["acquisition_url"] == BASE_STOCKS_SOURCE for item in registry_public()))
 
 
 if __name__ == "__main__":

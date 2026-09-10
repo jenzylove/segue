@@ -1,5 +1,19 @@
 # Segue Integration Ledger
 
+## 2026-09-09 — Public landing data and acquisition provenance
+
+The landing page is wallet-neutral. It reads the locked Morpho market/oracle
+and the explicitly labelled public reference position, while `/app.html` is the
+connected-wallet workspace. The landing page intentionally renders current
+oracle/position values only; it does not fabricate historical stock candles or
+trajectories when no verified chart feed is available.
+
+Portfolio acquisition links and the five-asset catalogue use Base's official
+Tokenized Stocks catalogue (`https://brand.base.org/stocks`). The page documents
+Coinbase B20 issuance and eligibility; Segue still checks each token onchain
+and marks sequence/credit capabilities independently. A portfolio-only asset
+must not be presented as borrowable.
+
 ## 2026-09-09 — Morpho Blue credit rail locked and live proof recorded
 
 Decision: keep the Segue name and reuse the sequenced policy architecture, with

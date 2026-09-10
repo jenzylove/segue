@@ -38,7 +38,9 @@ The coding agent **should research** unresolved external facts before implementi
 
 - which additional B20 stocks beyond the M2 proof asset should appear in the final curated frontend catalogue;
 - exact current official token/feed metadata for those additional assets;
-- the best real chart-data provider that is practical for the hackathon;
+- the best real chart-data provider that is practical for the hackathon (the
+  public landing currently uses live Morpho/Base oracle reads and deliberately
+  avoids unproven historical charts);
 - current 1inch API response details and current approved spender/execution target;
 - deployment platform details for the worker, PostgreSQL, and frontend;
 - exact current Base Builder Code integration steps;
@@ -1253,7 +1255,7 @@ Every milestone ends with:
 | M2C Morpho Blue credit mission | **MAINNET PROOF / SIGNATURE READY** | Locked NVDAc/USDC market, real collateral + borrow evidence, live proposal/risk, unsigned close path |
 | M3 Autonomous worker | **IMPLEMENTED LOCALLY** | Live Morpho reads, receipt/postcondition reconciliation, retry/idempotency; public worker host still requires deployment credentials |
 | M4 Persistence/history/multi-user | **IMPLEMENTED LOCALLY** | Durable SQLite missions/actions/snapshots/timeline and restart recovery; PostgreSQL scale-out remains future work |
-| M5 Trading frontend | **IMPLEMENTED LOCALLY** | Frozen landing surface and `/app.html` connected workspace read live Morpho position/risk/liquidity/evidence; durable sequence drafts now bridge to the deployed M1 ABI through a fail-closed activation-plan route |
+| M5 Trading frontend | **IMPLEMENTED LOCALLY** | Frozen landing surface now renders public live Morpho/Base market context plus an explicitly labelled reference position; `/app.html` connected workspace reads live portfolio/sequence/credit/activity state and durable drafts bridge to the deployed M1 ABI through a fail-closed activation-plan route |
 | M6 Production deployment/evidence | **PREPARED** | Docker/unified FastAPI service and deployment runbook; public host + Builder Code evidence remain credential/funding work |
 | M7 Submission | NOT STARTED | B12 + final docs/demo/freeze |
 
