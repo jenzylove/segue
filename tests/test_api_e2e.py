@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import os
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -173,6 +174,39 @@ class ApiJourneyTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/v1/sequences/{sequence['id']}").json()["events"][0]["kind"], "SEQUENCE_CREATED")
         invalid = self.client.post("/v1/sequences", json={**body, "steps": body["steps"] * 9})
         self.assertEqual(invalid.status_code, 400)
+
+    def test_sequence_activation_plan_fails_closed_without_deployment_config(self) -> None:
+        created = self.client.post("/v1/sequences", json={"wallet": WALLET, "max_capital_atomic": 1, "steps": [{"condition_type": "PRICE_ABOVE", "threshold": 1, "action": "BUY", "sell_token": USDC_BASE, "buy_token": CANONICAL_COLLATERAL, "amount": 1}]})
+        self.assertEqual(created.status_code, 200, created.text)
+        with patch.dict(os.environ, {"BASE_RPC_URL": "", "FACTORY_ADDRESS": "", "EXECUTOR_ADDRESS": ""}, clear=False):
+            response = self.client.post(f"/v1/sequences/{created.json()['id']}/activation-plan")
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertIn("FACTORY_ADDRESS", response.json()["detail"])
+
+    def test_sequence_draft_rejects_deployment_identity(self) -> None:
+        response = self.client.post("/v1/sequences", json={
+            "wallet": WALLET,
+            "vault_address": "0x" + "4" * 40,
+            "max_capital_atomic": 1,
+            "steps": [{"condition_type": "PRICE_ABOVE", "threshold": 1, "action": "BUY", "sell_token": USDC_BASE, "buy_token": CANONICAL_COLLATERAL, "amount": 1}],
+        })
+        self.assertEqual(response.status_code, 400, response.text)
+
+    def test_sequence_receipt_reconciliation_activates_only_after_confirmed_events(self) -> None:
+        created = self.client.post("/v1/sequences", json={"wallet": WALLET, "max_capital_atomic": 1, "steps": [{"condition_type": "PRICE_ABOVE", "threshold": 1, "action": "BUY", "sell_token": USDC_BASE, "buy_token": CANONICAL_COLLATERAL, "amount": 1}, {"condition_type": "PRICE_BELOW", "threshold": 1, "action": "SELL", "sell_token": CANONICAL_COLLATERAL, "buy_token": USDC_BASE, "amount": 1}]})
+        self.assertEqual(created.status_code, 200, created.text)
+        sequence = api._missions.sequence_store().get(created.json()["id"])
+        sequence["vault_address"] = "0x" + "4" * 40
+        api._missions.sequence_store().save(sequence)
+        receipt = {"status": "CONFIRMED", "events": [{"kind": "POLICY_CREATED", "policy_id": 3}, {"kind": "STEP_EXECUTED", "step_index": 0, "sold_atomic": 1, "bought_atomic": 2, "min_buy_atomic": 1}, {"kind": "STEP_ACTIVATED", "step_index": 1, "reference_price": 99}]}
+        with patch.object(api, "_rpc", return_value="rpc"), patch.object(api, "reconcile_sequence_receipt", return_value=receipt):
+            response = self.client.post(f"/v1/sequences/{created.json()['id']}/reconcile", json={"tx_hash": "0x" + "b" * 64})
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["status"], "ACTIVE")
+        self.assertEqual(payload["active_step"], 1)
+        self.assertEqual(payload["steps"][0]["status"], "EXECUTED")
+        self.assertEqual(payload["steps"][1]["reference_price"], 99)
 
     def test_activity_aggregates_credit_and_sequence_events(self) -> None:
         created = self.client.post("/v1/sequences", json={"wallet": WALLET, "max_capital_atomic": 1, "steps": [{"condition_type": "PRICE_ABOVE", "threshold": 1, "action": "BUY", "sell_token": USDC_BASE, "buy_token": CANONICAL_COLLATERAL, "amount": 1}]})

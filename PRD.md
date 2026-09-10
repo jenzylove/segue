@@ -1253,7 +1253,7 @@ Every milestone ends with:
 | M2C Morpho Blue credit mission | **MAINNET PROOF / SIGNATURE READY** | Locked NVDAc/USDC market, real collateral + borrow evidence, live proposal/risk, unsigned close path |
 | M3 Autonomous worker | **IMPLEMENTED LOCALLY** | Live Morpho reads, receipt/postcondition reconciliation, retry/idempotency; public worker host still requires deployment credentials |
 | M4 Persistence/history/multi-user | **IMPLEMENTED LOCALLY** | Durable SQLite missions/actions/snapshots/timeline and restart recovery; PostgreSQL scale-out remains future work |
-| M5 Trading frontend | **IMPLEMENTED LOCALLY** | Frozen landing surface and `/app.html` position workspace read live Morpho position/risk/liquidity/evidence in browser |
+| M5 Trading frontend | **IMPLEMENTED LOCALLY** | Frozen landing surface and `/app.html` connected workspace read live Morpho position/risk/liquidity/evidence; durable sequence drafts now bridge to the deployed M1 ABI through a fail-closed activation-plan route |
 | M6 Production deployment/evidence | **PREPARED** | Docker/unified FastAPI service and deployment runbook; public host + Builder Code evidence remain credential/funding work |
 | M7 Submission | NOT STARTED | B12 + final docs/demo/freeze |
 
@@ -1281,12 +1281,16 @@ revert capture, target/feed/calldata validation, distinct owner/executor roles,
 post-round-trip false-policy setup, and ERC-8021 suffixing on supported M2 script
 calls. It produced local test evidence only; see `docs/M2_AUDIT.md`.
 
-The immediate human-only dependencies may include:
+The current local audit found no M1 deployment artifact or configured factory,
+vault, executor, or 1inch execution target. The activation-plan bridge therefore
+stops before producing an owner signature plan until those public deployment
+values are restored. The remaining protected inputs are:
 
 - a valid `ONEINCH_API_KEY` stored locally;
-- current live execution target resolved from 1inch;
-- deliberately small Base ETH balances for required gas wallets;
-- deliberately small demo-owner USDC for the proof trade;
+- a public `EXECUTOR_ADDRESS` derived from its private key;
+- verified `FACTORY_ADDRESS` and (after `VaultCreated`) `DEMO_VAULT_ADDRESS`;
+- the current live execution target resolved from 1inch;
+- deliberately small Base ETH/USDC balances for required gas and proof actions;
 - a fresh enough NVDA total-return feed for the condition proof.
 
 Follow `docs/M2_MAINNET.md` rather than inventing a new M2 flow.

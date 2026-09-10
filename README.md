@@ -56,3 +56,10 @@ The current curated catalogue is sourced from Base's official stocks listing
 AMZNc. NVDAc is the only asset currently marked with a verified Segue Chainlink
 feed and Morpho Blue credit market; the other entries are portfolio-visible and
 explicitly credit/sequence pending until their rails are independently verified.
+
+For the verified NVDAc path, `POST /v1/sequences/{id}/activation-plan` bridges a
+stored draft to the deployed `StockPolicyVault` ABI. It resolves the canonical
+vault from the configured factory and produces the owner transaction sequence;
+`POST /v1/sequences/{id}/route` then consumes the existing server-side 1inch
+adapter, and `/reconcile` advances policy state only from the confirmed vault
+receipt. Missing deployment values or the protected 1inch key fail closed.

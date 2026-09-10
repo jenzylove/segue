@@ -96,10 +96,11 @@ Therefore M2 replaces only the routing adapter. Coinbase B20, Base, Chainlink, p
 ## Credential status
 
 - `BASE_RPC_URL`: configured locally; never commit or paste a private endpoint.
-- `EXECUTOR_PRIVATE_KEY`: obtained; never commit or paste it.
-- `EXECUTOR_ADDRESS`: configured, but M2 preflight reported zero Base ETH; fund a deliberately small gas amount before deployment.
-- `ONEINCH_API_KEY`: required next; store only in local/server environment.
-- `EXECUTION_TARGET_ADDRESS`: leave blank until the live 1inch preflight prints the current `approve/spender` address, then copy that public address locally before deployment.
+- `EXECUTOR_PRIVATE_KEY`: not present in the current local environment; never commit or paste it.
+- `EXECUTOR_ADDRESS`: missing from the current local environment. It must be the public address derived from the executor key before deployment/worker execution.
+- `ONEINCH_API_KEY`: missing from the current local environment; store only in local/server environment.
+- `EXECUTION_TARGET_ADDRESS`: missing; leave blank until the live 1inch preflight prints the current `approve/spender` address, then copy that public address locally before deployment.
+- `FACTORY_ADDRESS` / `DEMO_VAULT_ADDRESS`: no deployment artifact or configured addresses are present in this checkout, so the sequence activation bridge returns a fail-closed prerequisite until M1 is deployed or its verified addresses are restored.
 - `ZEROX_API_KEY`: historical/superseded for M2 after the verified RWA authorization blocker.
 - `BASE_BUILDER_CODE`: app setup started; domain verification waits for a deployed Segue URL and is not an M2 transaction-path blocker.
 

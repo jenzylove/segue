@@ -198,6 +198,14 @@ linear steps (maximum eight) with the same condition, amount, cap and deviation
 semantics enforced by `StockPolicyVault`. `GET /v1/activity` merges durable
 credit mission and sequence events. A connected wallet with no records receives
 an empty state; the reference wallet is reachable only through `?demo=1`.
+`POST /v1/sequences/{id}/activation-plan` is the single bridge from a stored
+draft to the deployed M1 ABI. It resolves the owner's canonical vault through
+the configured factory, then generates `createVault`, settlement approval,
+`depositSettlement`, and `createPolicy` calls. It never accepts a vault,
+factory, executor, or calldata from the browser and fails closed when the M1
+deployment is not configured. After the owner confirms the policy, the existing
+1inch adapter supplies route bytes to `executeStep`; the vault remains the
+authority that rechecks the condition and advances the next reference.
 
 ## Verification status
 

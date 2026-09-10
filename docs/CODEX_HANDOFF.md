@@ -22,6 +22,13 @@ landing surface and `/app.html` connected-wallet workspace consume this API;
 the workspace now exposes Portfolio, Sequences, Credit and Activity. Portfolio
 capabilities are registry-driven and explicit, while the original B20 sequence
 vault remains subject to its own 1inch/deployment/funding evidence gates.
+`POST /v1/sequences/{id}/activation-plan` now translates one persisted NVDAc
+sequence into the deployed `StockPolicyVault` ABI (vault creation when needed,
+settlement approval, funding and policy creation). It resolves the canonical
+vault from the factory and rejects missing deployment configuration; it never
+accepts protocol addresses or route calldata from the browser. The existing
+1inch adapter remains the only route source for the executor's later
+`executeStep` call.
 
 ---
 

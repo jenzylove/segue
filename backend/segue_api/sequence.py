@@ -57,6 +57,13 @@ def validate_steps(steps: Any) -> list[dict[str, Any]]:
         delta = int(raw.get("delta_bps", raw.get("deltaBps", 0)) or 0)
         sell_token = _address(raw.get("sell_token"), f"step {index + 1} sell_token")
         buy_token = _address(raw.get("buy_token"), f"step {index + 1} buy_token")
+        condition_asset = str(raw.get("condition_asset", raw.get("conditionAsset", "")) or "")
+        if not condition_asset:
+            # Drafts created before the onchain bridge omitted this field. The
+            # stock side is deterministic for the supported BUY/SELL route and
+            # is recovered here so old drafts remain portable.
+            condition_asset = buy_token if action == "BUY" else sell_token
+        condition_asset = _address(condition_asset, f"step {index + 1} condition_asset")
         if sell_token.lower() == buy_token.lower():
             raise ValueError(f"step {index + 1} sell_token and buy_token must differ")
         if condition in {"PRICE_ABOVE", "PRICE_BELOW"} and threshold <= 0:
@@ -65,6 +72,7 @@ def validate_steps(steps: Any) -> list[dict[str, Any]]:
             raise ValueError(f"step {index + 1} delta_bps must be between 1 and 9999")
         normalized.append({
             "condition_type": condition,
+            "condition_asset": condition_asset,
             "threshold": threshold,
             "delta_bps": delta,
             "action": action,

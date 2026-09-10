@@ -36,6 +36,14 @@ from .morpho_risk import proposal as morpho_proposal
 from .worker import reconcile_live, reconcile_receipt
 from .b20 import portfolio_for_wallet, registry_public
 from .sequence import SequenceStore
+from .sequence_chain import build_activation_plan, deployment_config, reconcile_sequence_receipt, resolve_vault
+from .sequence_chain import build_execute_plan
+
+try:
+    from scripts.m2_firm_quote import oneinch_get, validate_swap_payload
+except ImportError:  # pragma: no cover - route remains explicitly unavailable
+    oneinch_get = None
+    validate_swap_payload = None
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -83,7 +91,12 @@ def _wallet(body: dict[str, Any]) -> str:
 
 
 def _reject_protocol_inputs(body: dict[str, Any]) -> None:
-    forbidden = {"calldata", "market_id", "morpho_address", "loan_token", "collateral_token", "oracle", "irm", "lltv", "collateral_price_usd", "debt_address"}
+    forbidden = {
+        "calldata", "market_id", "morpho_address", "loan_token", "collateral_token",
+        "oracle", "irm", "lltv", "collateral_price_usd", "debt_address",
+        "vault_address", "factory_address", "executor_address", "execution_target_address",
+        "oneinch_api_key",
+    }
     supplied = sorted(forbidden.intersection(body))
     if supplied: raise HTTPException(status_code=400, detail=f"backend-owned protocol fields are not accepted: {', '.join(supplied)}")
 
@@ -205,7 +218,10 @@ if FastAPI:
         try:
             steps = body.get("steps")
             max_capital = int(body.get("max_capital_atomic", body.get("max_capital", 0)) or 0)
-            sequence = _sequence_store().create(owner, steps, max_capital_atomic=max_capital, vault_address=body.get("vault_address"))
+            # Vault/factory identity is resolved from server configuration and
+            # the canonical factory mapping during activation. It is never a
+            # draft input supplied by the browser.
+            sequence = _sequence_store().create(owner, steps, max_capital_atomic=max_capital)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {**sequence, "events": _sequence_store().events(sequence["id"])}
@@ -217,6 +233,143 @@ if FastAPI:
         if not sequence:
             raise HTTPException(status_code=404, detail="sequence not found")
         return {**sequence, "events": store.events(sequence_id)}
+
+    @app.post("/v1/sequences/{sequence_id}/activation-plan")
+    def sequence_activation_plan(sequence_id: str) -> dict[str, Any]:
+        """Translate one persisted draft into the deployed M1 owner calls.
+
+        Deployment addresses are server-owned configuration.  The browser can
+        request a plan, but cannot provide a factory, vault, executor or raw
+        calldata.  Missing deployment state is returned as a clear external
+        prerequisite rather than a fabricated plan.
+        """
+        sequence = _sequence_store().get(sequence_id)
+        if not sequence:
+            raise HTTPException(status_code=404, detail="sequence not found")
+        config = deployment_config()
+        missing = [name for name in ("BASE_RPC_URL", "FACTORY_ADDRESS", "EXECUTOR_ADDRESS") if not os.environ.get(name, "").strip()]
+        if missing:
+            raise HTTPException(status_code=503, detail=f"M1 deployment configuration required: {', '.join(missing)}")
+        try:
+            vault = resolve_vault(_rpc(), config["FACTORY_ADDRESS"], sequence["wallet"])
+            plan = build_activation_plan(sequence, factory=config["FACTORY_ADDRESS"], executor=config["EXECUTOR_ADDRESS"], vault=vault)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"M1 activation plan could not be built: {exc}") from exc
+        sequence["vault_address"] = plan.get("vault") or sequence.get("vault_address")
+        sequence["onchain_plan"] = {"status": plan["status"], "factory": plan["factory"], "executor": plan["executor"], "vault": plan.get("vault")}
+        _sequence_store().save(sequence)
+        _sequence_store().event(sequence_id, "ACTIVATION_PLAN_READY", {"status": plan["status"], "vault": plan.get("vault"), "source": "deployed StockPolicyVault ABI"})
+        return plan
+
+    @app.post("/v1/sequences/{sequence_id}/route")
+    def sequence_route(sequence_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Get one validated 1inch route for the persisted active step.
+
+        The provider response is consumed server-side.  Callers select only a
+        step index; they cannot override tokens, amount, vault, target or route
+        calldata.  This endpoint is intentionally blocked until the protected
+        1inch credential and a deployed/funded vault are available.
+        """
+        _reject_protocol_inputs(body or {})
+        store = _sequence_store(); sequence = store.get(sequence_id)
+        if not sequence:
+            raise HTTPException(status_code=404, detail="sequence not found")
+        config = deployment_config()
+        missing = [name for name in ("BASE_RPC_URL", "FACTORY_ADDRESS", "EXECUTOR_ADDRESS", "EXECUTION_TARGET_ADDRESS", "ONEINCH_API_KEY") if not config.get(name) and not os.environ.get(name, "").strip()]
+        if missing:
+            raise HTTPException(status_code=503, detail=f"1inch route configuration required: {', '.join(missing)}")
+        if oneinch_get is None or validate_swap_payload is None:
+            raise HTTPException(status_code=503, detail="1inch adapter is unavailable in this runtime")
+        try:
+            index = int((body or {}).get("step_index", sequence.get("active_step", 0)) or 0)
+            steps = sequence.get("steps") or []
+            if index < 0 or index >= len(steps):
+                raise ValueError("step_index is outside the persisted sequence")
+            step = steps[index]
+            sell_token = str(step.get("sell_token", "")); buy_token = str(step.get("buy_token", ""))
+            if {sell_token.lower(), buy_token.lower()} != {USDC_BASE.lower(), CANONICAL_COLLATERAL.lower()}:
+                raise ValueError("1inch route is limited to the verified NVDAc/USDC pair")
+            # Resolve the canonical one-vault-per-wallet mapping on every quote;
+            # persisted state is evidence/cache, never the authority.
+            vault = resolve_vault(_rpc(), config["FACTORY_ADDRESS"], sequence["wallet"]) or ""
+            if not vault:
+                raise ValueError("canonical vault is not deployed for this wallet; confirm VaultCreated first")
+            persisted_vault = str(sequence.get("vault_address") or "")
+            if persisted_vault and persisted_vault.lower() != vault.lower():
+                raise ValueError("persisted vault does not match the canonical factory mapping")
+            mode = str(step.get("amount_mode", "FIXED")).upper()
+            amount = int(step.get("amount", 0) or 0)
+            if mode == "PERCENT_BALANCE":
+                amount = erc20_balance(_rpc(), sell_token, vault) * amount // 10_000
+            if amount <= 0:
+                raise ValueError("persisted step resolves to zero sell amount")
+            live_target = str((oneinch_get("approve/spender") or {}).get("address") or "")
+            if live_target.lower() != config["EXECUTION_TARGET_ADDRESS"].lower():
+                raise ValueError("configured execution target no longer matches 1inch approve/spender")
+            direction = {USDC_BASE.lower(): "buy", CANONICAL_COLLATERAL.lower(): "sell"}[sell_token.lower()]
+            slippage_bps = int(os.environ.get("M2_ONEINCH_SLIPPAGE_BPS", "50"))
+            swap = oneinch_get("swap", {"src": sell_token, "dst": buy_token, "amount": str(amount), "from": vault, "origin": config["EXECUTOR_ADDRESS"], "receiver": vault, "slippage": str(Decimal(slippage_bps) / Decimal(100)), "allowPartialFill": "false", "disableEstimate": "false", "forceApprove": "true", "includeProtocols": "true", "includeTokensInfo": "true"})
+            dst_amount, route_calldata = validate_swap_payload(swap, sell_token=sell_token, buy_token=buy_token, vault=vault, execution_target=config["EXECUTION_TARGET_ADDRESS"])
+            policy_id = int(sequence.get("policy_id", 0) or 0)
+            execute_plan = build_execute_plan(vault, policy_id, route_calldata, executor=config["EXECUTOR_ADDRESS"]) if policy_id else None
+            sequence["vault_address"] = vault
+            sequence["routes"] = {**(sequence.get("routes") or {}), str(index): {"target": config["EXECUTION_TARGET_ADDRESS"], "sell_token": sell_token, "buy_token": buy_token, "amount": amount, "dst_amount": dst_amount, "direction": direction, "calldata": route_calldata}}
+            store.save(sequence)
+            store.event(sequence_id, "ROUTE_QUOTED", {"step_index": index, "target": config["EXECUTION_TARGET_ADDRESS"], "amount": amount, "dst_amount": dst_amount, "source": "1inch Classic Swap"})
+            return {"status": "ROUTE_READY", "sequence_id": sequence_id, "step_index": index, "vault": vault, "target": config["EXECUTION_TARGET_ADDRESS"], "sell_token": sell_token, "buy_token": buy_token, "amount": amount, "dst_amount": dst_amount, "execute_plan": execute_plan, "next_step": "Persist the PolicyCreated policy_id before preparing executeStep." if not policy_id else "Submit the executeStep plan from the executor wallet after previewExecution is READY."}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"1inch route validation failed: {exc}") from exc
+
+    @app.post("/v1/sequences/{sequence_id}/reconcile")
+    def reconcile_sequence(sequence_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Advance sequence state only from a confirmed vault receipt."""
+        _reject_protocol_inputs(body)
+        store = _sequence_store(); sequence = store.get(sequence_id)
+        if not sequence:
+            raise HTTPException(status_code=404, detail="sequence not found")
+        tx_hash = str(body.get("tx_hash", ""))
+        if sequence.get("last_tx_hash") == tx_hash and sequence.get("onchain_status") in {"CONFIRMED", "FAILED"}:
+            return {**sequence, "events": store.events(sequence_id), "receipt_status": sequence["onchain_status"], "decoded_events": [] , "already_reconciled": True}
+        try:
+            result = reconcile_sequence_receipt(_rpc(), sequence, tx_hash)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"sequence receipt reconciliation failed: {exc}") from exc
+        sequence["last_tx_hash"] = tx_hash
+        sequence["last_receipt"] = result.get("receipt")
+        sequence["onchain_status"] = result["status"]
+        if result["status"] == "CONFIRMED":
+            steps = sequence.get("steps") or []
+            expected_policy = int(sequence.get("policy_id", 0) or 0)
+            for event in result["events"]:
+                event_policy = int(event.get("policy_id", 0) or 0)
+                if expected_policy and event_policy and event_policy != expected_policy:
+                    raise HTTPException(status_code=409, detail="receipt belongs to a different persisted policy")
+                if event["kind"] == "POLICY_CREATED":
+                    sequence["policy_id"] = event["policy_id"]
+                    sequence["status"] = "ACTIVE"
+                elif event["kind"] == "STEP_ACTIVATED":
+                    index = event["step_index"]
+                    if index < len(steps):
+                        steps[index]["status"] = "ACTIVE"
+                        steps[index]["reference_price"] = event.get("reference_price")
+                    sequence["active_step"] = index
+                elif event["kind"] == "STEP_EXECUTED":
+                    index = event["step_index"]
+                    if index < len(steps):
+                        steps[index]["status"] = "EXECUTED"
+                        steps[index]["execution"] = event
+                elif event["kind"] == "POLICY_COMPLETED":
+                    sequence["status"] = "COMPLETED"
+            sequence["steps"] = steps
+        store.save(sequence)
+        store.event(sequence_id, "SEQUENCE_RECEIPT_RECONCILED", {"status": result["status"], "tx_hash": tx_hash, "events": result.get("events", [])})
+        return {**sequence, "events": store.events(sequence_id), "receipt_status": result["status"], "decoded_events": result.get("events", [])}
 
     @app.get("/v1/activity")
     def activity(wallet: str) -> dict[str, Any]:

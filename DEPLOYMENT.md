@@ -66,6 +66,19 @@ GET https://<host>/v1/activity?wallet=0x48C8B4D40dE216C652ED4D67f6466CeBA90054CA
 GET https://<host>/app.html?demo=1
 ```
 
+For a stored sequence, request the owner-only activation bridge with:
+
+```text
+POST https://<host>/v1/sequences/<sequence_id>/activation-plan
+POST https://<host>/v1/sequences/<sequence_id>/route
+POST https://<host>/v1/sequences/<sequence_id>/reconcile
+```
+
+The first route resolves the canonical vault and emits only contract-generated
+unsigned calls. The route endpoint consumes the existing server-side 1inch
+adapter; the reconcile endpoint accepts only a transaction hash and advances
+the stored sequence after a successful vault receipt/event check.
+
 The demo workspace intentionally shows the verified reference position. A
 normal visit to `/app.html` opens the wallet connection gate and only reads the
 address returned by the browser wallet. The second response must show locked market
