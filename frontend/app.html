@@ -68,7 +68,7 @@
       const shortAddress = address => address ? `${address.slice(0, 6)}…${address.slice(-4)}` : '';
       const setStatus = (message, kind = '') => { const node = $('status'); if (!node) return; node.className = `status requires-wallet ${kind}`; node.querySelector('span').textContent = message; };
       const setGateMessage = message => { const node = $('wallet-message'); if (node) node.textContent = message || ''; };
-      const setWalletBadge = (address, isDemo = false) => { const badge = $('wallet-badge'); badge.hidden = !address; badge.classList.toggle('demo', Boolean(isDemo)); set('wallet-badge-text', isDemo ? `Live demo · ${shortAddress(address)}` : shortAddress(address)); $('disconnect').hidden = !address; };
+      const setWalletBadge = (address, isDemo = false) => { const badge = $('wallet-badge'); badge.hidden = !address; badge.classList.toggle('demo', Boolean(isDemo)); set('wallet-badge-text', isDemo ? `Live demo · ${shortAddress(address)}` : shortAddress(address)); $('disconnect').hidden = !address || isDemo; };
       const setDisconnected = message => { wallet = null; mission = null; plan = null; document.body.dataset.walletState = 'disconnected'; setWalletBadge(null); setGateMessage(message || ''); clearWorkspace(); };
       const setConnected = (address, isDemo = false) => { wallet = address; document.body.dataset.walletState = 'connected'; setWalletBadge(address, isDemo); setGateMessage(''); };
       const clearWorkspace = () => { portfolioState = null; sequences = []; activityState = null; ['collateral-value','debt','ltv','liquidity','collateral','shares','oracle','lltv','safe-max','health','wallet','mission-market'].forEach(id => set(id, '—')); set('market-id', 'Verified credit market · awaiting wallet'); set('provenance', 'Verified Base provider state appears after connection.'); set('mission-state', 'NO MISSION'); set('route-title', 'No credit mission loaded'); set('policy', 'Connect to read a durable mission.'); set('action-message', 'No unsigned action prepared.'); set('plan-status', 'None'); set('summary-holdings', 'Connect wallet'); set('summary-sequence', 'Connect wallet'); set('summary-credit', 'Connect wallet'); set('summary-activity', 'Connect wallet'); $('health-pill').textContent = 'Waiting'; $('health-pill').className = 'pill'; $('plan-actions').innerHTML = '<div class="empty">Connect to prepare an unsigned plan.</div>'; $('timeline').innerHTML = '<div class="empty">Connect to load onchain evidence.</div>'; $('portfolio-assets').innerHTML = '<div class="tab-empty">Connect to read supported holdings.</div>'; $('market-asset-selector').innerHTML = ''; $('market-asset-detail').innerHTML = '<div><b>Connect wallet</b><span>Explore verified assets after connection</span></div>'; $('sequence-list').innerHTML = '<div class="tab-empty">Connect to recover sequences.</div>'; $('activity-list').innerHTML = '<div class="tab-empty">Connect to load activity.</div>'; setStatus('Connect wallet to read live Base state.'); };
@@ -91,28 +91,45 @@
         catch (error) { setDisconnected(error.message || 'Wallet connection was not completed.'); }
         finally { $('connect').disabled = false; }
       }
+      function demoCollateralFor(asset) {
+        if (!demoMode || asset.ticker !== 'NVDAc') return 0;
+        return Number(state?.position?.collateral_position_atomic || 0);
+      }
+      function humanTokenAmount(atomic, decimals = 8) {
+        return Number(atomic || 0) / (10 ** Number(decimals || 0));
+      }
       function renderPortfolio(data) {
         portfolioState = data;
         const assets = data.assets || [];
         const root = $('portfolio-assets');
         const selector = $('market-asset-selector');
+        if (demoMode) set('portfolio-subtitle', 'Live demo position + official Coinbase Tokenized Stocks on Base');
         selector.innerHTML = assets.map(asset => `<option value="${asset.address}">${asset.ticker} · ${asset.company}</option>`).join('');
         selector.onchange = () => renderMarketAsset(selector.value);
         if (assets.length) renderMarketAsset(selector.value || assets[0].address);
         if (!assets.length) { root.innerHTML = '<div class="tab-empty">No verified catalogue assets are available right now.<br /><a href="https://brand.base.org/stocks" target="_blank" rel="noreferrer">Open the official Base catalogue ↗</a></div>'; return; }
-        const holdings = assets.filter(asset => asset.status === 'LIVE' && Number(asset.balance_atomic || 0) > 0);
-        const catalogueAssets = assets.filter(asset => !(asset.status === 'LIVE' && Number(asset.balance_atomic || 0) > 0));
+        const isPosition = asset => (asset.status === 'LIVE' && Number(asset.balance_atomic || 0) > 0) || demoCollateralFor(asset) > 0;
+        const holdings = assets.filter(isPosition);
+        const catalogueAssets = assets.filter(asset => !isPosition(asset));
         const card = asset => {
-          const live = asset.status === 'LIVE'; const owned = live && Number(asset.balance_atomic || 0) > 0;
-          const balance = owned ? `${Number(asset.balance).toLocaleString(undefined, { maximumFractionDigits: 8 })} ${asset.symbol || asset.ticker}` : live ? 'Not held' : 'Read pending';
-          const status = live ? owned ? 'Held in wallet' : 'Live balance · not held' : 'Onchain read pending';
+          const live = asset.status === 'LIVE';
+          const liquidAtomic = Number(asset.balance_atomic || 0);
+          const owned = live && liquidAtomic > 0;
+          const collateralAtomic = demoCollateralFor(asset);
+          const collateralized = collateralAtomic > 0;
+          const decimals = Number(asset.decimals || 8);
+          const collateralHuman = humanTokenAmount(collateralAtomic, decimals);
+          const balance = collateralized ? `${collateralHuman.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${asset.symbol || asset.ticker}` : owned ? `${Number(asset.balance).toLocaleString(undefined, { maximumFractionDigits: 8 })} ${asset.symbol || asset.ticker}` : live ? 'Not held' : 'Read pending';
+          const balanceLabel = collateralized ? `${Number(asset.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 8 })} liquid · collateralized in Morpho` : 'wallet balance · Base mainnet';
+          const status = collateralized ? 'Collateralized · live demo' : live ? owned ? 'Held in wallet' : 'Live balance · not held' : 'Onchain read pending';
           const sequence = asset.sequence_supported ? 'Sequences supported' : 'Sequence rail pending';
           const credit = asset.credit_supported ? 'Unlock liquidity' : 'Credit rail not verified';
-          const action = asset.credit_supported && owned ? `<button class="button button-indigo" type="button" data-open-credit>${credit}</button>` : '';
+          const action = asset.credit_supported && (owned || collateralized) ? `<button class="button button-indigo" type="button" data-open-credit>${collateralized ? 'View live credit' : credit}</button>` : '';
           const acquire = asset.acquisition_url || asset.provenance || 'https://brand.base.org/stocks';
-          return `<article class="asset-card"><div class="asset-head"><div><div class="asset-symbol">${asset.ticker}</div><div class="asset-company">${asset.company}</div></div><span class="pill${live ? '' : ' warn'}">${status}</span></div><div class="asset-balance">${balance}</div><div class="asset-balance-label">wallet balance · Base mainnet</div><div class="asset-meta"><span class="${live ? 'verified' : ''}">${asset.feed_status}</span><span>${sequence}</span><span>${credit}</span></div><div class="asset-actions">${action}<a class="button button-light" href="${acquire}" target="_blank" rel="noreferrer">Get stock / Trade on Base ↗</a></div>${asset.error ? `<p class="error">Onchain read pending: ${asset.error}</p>` : ''}</article>`;
+          return `<article class="asset-card"><div class="asset-head"><div><div class="asset-symbol">${asset.ticker}</div><div class="asset-company">${asset.company}</div></div><span class="pill${live || collateralized ? '' : ' warn'}">${status}</span></div><div class="asset-balance">${balance}</div><div class="asset-balance-label">${balanceLabel}</div><div class="asset-meta"><span class="${live || collateralized ? 'verified' : ''}">${asset.feed_status}</span><span>${sequence}</span><span>${credit}</span></div><div class="asset-actions">${action}<a class="button button-light" href="${acquire}" target="_blank" rel="noreferrer">Get stock / Trade on Base ↗</a></div>${asset.error ? `<p class="error">Onchain read pending: ${asset.error}</p>` : ''}</article>`;
         };
-        root.innerHTML = `${holdings.length ? `<div class="catalogue-section-label">Held in this wallet</div>${holdings.map(card).join('')}` : '<div class="tab-empty catalogue-empty"><strong>No supported tokenized stocks found in this wallet.</strong><span>Explore the verified catalogue below to add a supported asset.</span><a class="button button-light" href="https://brand.base.org/stocks" target="_blank" rel="noreferrer">Explore tokenized stocks on Base ↗</a></div>'}<div class="catalogue-section-label">Verified catalogue · capabilities vary by asset</div>${catalogueAssets.map(card).join('')}`;
+        const positionLabel = demoMode && holdings.length ? 'Live demo positions' : 'Held in this wallet';
+        root.innerHTML = `${holdings.length ? `<div class="catalogue-section-label">${positionLabel}</div>${holdings.map(card).join('')}` : '<div class="tab-empty catalogue-empty"><strong>No supported tokenized stocks found in this wallet.</strong><span>Explore the verified catalogue below to add a supported asset.</span><a class="button button-light" href="https://brand.base.org/stocks" target="_blank" rel="noreferrer">Explore tokenized stocks on Base ↗</a></div>'}<div class="catalogue-section-label">${demoMode ? 'Explore more tokenized stocks' : 'Verified catalogue · capabilities vary by asset'}</div>${catalogueAssets.map(card).join('')}`;
         root.querySelectorAll('[data-open-credit]').forEach(button => button.addEventListener('click', () => showView('credit')));
         refreshSequenceBuilderAssets();
       }
@@ -120,11 +137,15 @@
         const asset = (portfolioState?.assets || []).find(item => item.address.toLowerCase() === String(address).toLowerCase());
         if (!asset) { $('market-asset-detail').innerHTML = '<div><b>No asset selected</b><span>Choose a verified stock</span></div>'; return; }
         const live = asset.status === 'LIVE'; const context = asset.market_context || {};
-        const balance = live ? `${Number(asset.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 8 })} ${asset.ticker}` : 'Balance read pending';
+        const collateralAtomic = demoCollateralFor(asset);
+        const collateralized = collateralAtomic > 0;
+        const liquid = live ? Number(asset.balance || 0) : 0;
+        const collateralHuman = humanTokenAmount(collateralAtomic, Number(asset.decimals || 8));
+        const balance = collateralized ? `${liquid.toLocaleString(undefined, { maximumFractionDigits: 8 })} liquid · ${collateralHuman.toLocaleString(undefined, { maximumFractionDigits: 8 })} collateralized` : live ? `${liquid.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${asset.ticker}` : 'Balance read pending';
         const market = context.oracle_price_1e36 ? `$${(Number(context.oracle_price_1e36) / 1e34).toFixed(2)} current oracle` : 'No verified live market context';
         const sequence = asset.sequence_supported ? 'Sequence supported' : 'Portfolio only';
-        const credit = asset.credit_supported ? 'Verified NVDAc credit' : 'No verified credit market';
-        $('market-asset-detail').innerHTML = `<div><b>${asset.ticker} · ${asset.company}</b><span class="mono">${asset.address}</span></div><div><b>${balance}</b><span>Connected-wallet balance</span></div><div><b>${market}</b><span>${context.oracle_price_1e36 ? 'Direct Base oracle state' : 'No chart or price fabricated'}</span></div><div><b>${sequence}</b><span>${credit}</span></div>`;
+        const credit = asset.credit_supported ? (collateralized ? 'Live credit position' : 'Verified NVDAc credit') : 'No verified credit market';
+        $('market-asset-detail').innerHTML = `<div><b>${asset.ticker} · ${asset.company}</b><span class="mono">${asset.address}</span></div><div><b>${balance}</b><span>${collateralized ? 'Live Base position' : 'Connected-wallet balance'}</span></div><div><b>${market}</b><span>${context.oracle_price_1e36 ? 'Direct Base oracle state' : 'No chart or price fabricated'}</span></div><div><b>${sequence}</b><span>${credit}</span></div>`;
       }
       function renderSummary(portfolio, sequenceData, position, missionData, activity) {
         const held = (portfolio?.assets || []).filter(asset => asset.status === 'LIVE' && Number(asset.balance_atomic || 0) > 0);
@@ -218,7 +239,7 @@
       }
       async function prepareSequenceActivation(sequenceId) { const node = $(`sequence-plan-${sequenceId}`); if (!node) return; node.textContent = 'Loading verified deployment configuration…'; try { const plan = await request(`/v1/sequences/${encodeURIComponent(sequenceId)}/activation-plan`, { method: 'POST' }); node.textContent = plan.status === 'AWAITING_VAULT' ? 'Vault creation is ready for the owner signature; confirm VaultCreated, then prepare funding and policy activation.' : 'Activation plan is signature-ready from the persisted sequence and deployed vault.'; } catch (error) { node.textContent = error.message; } }
       async function restoreConnection() {
-        if (demoMode) { setConnected(DEMO_WALLET, true); await refresh(); return; }
+        if (demoMode) { setConnected(DEMO_WALLET, true); await refresh(); showView('credit'); return; }
         if (!provider()) { setDisconnected('No browser wallet detected.'); return; }
         try { const accounts = await provider().request({ method: 'eth_accounts' }); if (!accounts?.length) { setDisconnected(''); return; } const current = await chainId(); if (current !== BASE_CHAIN_ID) { setDisconnected('Switch your wallet to Base mainnet, then connect again.'); return; } setConnected(accounts[0]); await refresh(); }
         catch (error) { setDisconnected('Wallet state could not be read. Connect again to retry.'); }
