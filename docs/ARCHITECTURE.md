@@ -205,7 +205,10 @@ the configured factory, then generates `createVault`, settlement approval,
 factory, executor, or calldata from the browser and fails closed when the M1
 deployment is not configured. After the owner confirms the policy, the existing
 1inch adapter supplies route bytes to `executeStep`; the vault remains the
-authority that rechecks the condition and advances the next reference.
+authority that rechecks the condition and advances the next reference. The
+receipt reconciler also decodes the factory's `VaultCreated` event, so a vault
+created from the first owner plan is persisted from chain evidence before the
+subsequent funding/policy plan is prepared.
 
 ## Verification status
 

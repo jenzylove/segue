@@ -75,9 +75,11 @@ POST https://<host>/v1/sequences/<sequence_id>/reconcile
 ```
 
 The first route resolves the canonical vault and emits only contract-generated
-unsigned calls. The route endpoint consumes the existing server-side 1inch
-adapter; the reconcile endpoint accepts only a transaction hash and advances
-the stored sequence after a successful vault receipt/event check.
+unsigned calls. If the wallet has no vault yet, reconcile the signed factory
+`VaultCreated` receipt through the same endpoint; the new vault address is then
+persisted before requesting activation again. The route endpoint consumes the
+existing server-side 1inch adapter; reconcile accepts only a transaction hash
+and advances the stored sequence after a successful receipt/event check.
 
 The demo workspace intentionally shows the verified reference position. A
 normal visit to `/app.html` opens the wallet connection gate and only reads the

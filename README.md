@@ -60,6 +60,8 @@ explicitly credit/sequence pending until their rails are independently verified.
 For the verified NVDAc path, `POST /v1/sequences/{id}/activation-plan` bridges a
 stored draft to the deployed `StockPolicyVault` ABI. It resolves the canonical
 vault from the configured factory and produces the owner transaction sequence;
-`POST /v1/sequences/{id}/route` then consumes the existing server-side 1inch
-adapter, and `/reconcile` advances policy state only from the confirmed vault
-receipt. Missing deployment values or the protected 1inch key fail closed.
+the same receipt endpoint records a newly emitted factory `VaultCreated` event
+before the owner requests funding/policy activation. `POST
+/v1/sequences/{id}/route` then consumes the existing server-side 1inch adapter,
+and `/reconcile` advances policy state only from confirmed receipt events.
+Missing deployment values or the protected 1inch key fail closed.

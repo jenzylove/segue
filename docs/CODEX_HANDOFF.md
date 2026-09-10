@@ -29,6 +29,8 @@ vault from the factory and rejects missing deployment configuration; it never
 accepts protocol addresses or route calldata from the browser. The existing
 1inch adapter remains the only route source for the executor's later
 `executeStep` call.
+The receipt bridge also decodes `VaultCreated` from the configured factory and
+persists that canonical vault before a second activation-plan request.
 
 ---
 
