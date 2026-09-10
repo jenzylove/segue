@@ -7,6 +7,7 @@ from backend.segue_api.sequence_chain import (
     POLICY_CREATED_TOPIC,
     STEP_ACTIVATED_TOPIC,
     STEP_EXECUTED_TOPIC,
+    VAULT_CREATED_TOPIC,
     reconcile_sequence_receipt,
 )
 
@@ -40,6 +41,22 @@ class SequenceReceiptTests(unittest.TestCase):
         self.assertEqual(result["status"], "CONFIRMED")
         self.assertEqual([event["kind"] for event in result["events"]], ["POLICY_CREATED", "STEP_EXECUTED", "STEP_ACTIVATED"])
         self.assertEqual(result["events"][-1]["reference_price"], 223_000_000)
+
+    def test_factory_vault_creation_is_decoded_before_vault_is_persisted(self) -> None:
+        factory = "0x3333333333333333333333333333333333333333"
+        receipt = {
+            "status": "0x1",
+            "logs": [{
+                "address": factory,
+                "topics": [VAULT_CREATED_TOPIC, topic(int("11" * 20, 16)), topic(int("44" * 20, 16)), topic(int("22" * 20, 16))],
+                "data": "0x" + topic(1_000_000)[2:],
+            }],
+        }
+        with patch("backend.segue_api.sequence_chain.rpc_call", return_value=receipt):
+            result = reconcile_sequence_receipt("rpc", {"wallet": "0x" + "11" * 20}, TX, factory=factory)
+        self.assertEqual(result["status"], "CONFIRMED")
+        self.assertEqual(result["events"][0]["kind"], "VAULT_CREATED")
+        self.assertEqual(result["events"][0]["vault"], "0x" + "44" * 20)
 
 
 if __name__ == "__main__":

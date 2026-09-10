@@ -35,6 +35,7 @@ POLICY_CREATED_TOPIC = _event_topic("PolicyCreated(uint256,uint8,uint256)")
 STEP_ACTIVATED_TOPIC = _event_topic("StepActivated(uint256,uint8,uint256)")
 STEP_EXECUTED_TOPIC = _event_topic("StepExecuted(uint256,uint8,uint256,uint256,uint256)")
 POLICY_COMPLETED_TOPIC = _event_topic("PolicyCompleted(uint256)")
+VAULT_CREATED_TOPIC = _event_topic("VaultCreated(address,address,address,uint256)")
 
 
 def _address(value: Any, field: str) -> str:
@@ -201,7 +202,7 @@ def deployment_config() -> dict[str, str]:
     return {name: os.environ.get(name, "").strip() for name in ("FACTORY_ADDRESS", "EXECUTOR_ADDRESS", "EXECUTION_TARGET_ADDRESS", "ONEINCH_API_KEY")}
 
 
-def reconcile_sequence_receipt(rpc: str, sequence: dict[str, Any], tx_hash: str) -> dict[str, Any]:
+def reconcile_sequence_receipt(rpc: str, sequence: dict[str, Any], tx_hash: str, *, factory: str | None = None) -> dict[str, Any]:
     """Decode only Segue vault events from a real receipt.
 
     A successful receipt without the expected vault event is deliberately not
@@ -216,24 +217,36 @@ def reconcile_sequence_receipt(rpc: str, sequence: dict[str, Any], tx_hash: str)
     if status != 1:
         return {"status": "FAILED", "tx_hash": tx_hash, "receipt": receipt, "events": []}
     vault = str(sequence.get("vault_address") or "").lower()
-    if not vault:
-        raise ValueError("sequence has no persisted canonical vault")
+    factory_address = str(factory or "").lower()
+    if factory_address:
+        factory_address = _address(factory_address, "factory").lower()
     decoded: list[dict[str, Any]] = []
     for log in receipt.get("logs") or []:
-        if str(log.get("address", "")).lower() != vault:
+        log_address = str(log.get("address", "")).lower()
+        if log_address != vault and log_address != factory_address:
             continue
         topics = [str(value).lower() for value in (log.get("topics") or [])]
         if not topics:
             continue
         data = str(log.get("data", "0x"))[2:]
-        if topics[0] == POLICY_CREATED_TOPIC.lower() and len(topics) >= 2:
+        if topics[0] == VAULT_CREATED_TOPIC.lower() and log_address == factory_address and len(topics) >= 4:
+            decoded.append({
+                "kind": "VAULT_CREATED",
+                "owner": "0x" + topics[1][-40:],
+                "vault": "0x" + topics[2][-40:],
+                "executor": "0x" + topics[3][-40:],
+                "max_capital_atomic": int(data[-64:], 16) if len(data) >= 64 else None,
+            })
+        elif topics[0] == POLICY_CREATED_TOPIC.lower() and len(topics) >= 2 and log_address == vault:
             decoded.append({"kind": "POLICY_CREATED", "policy_id": int(topics[1], 16), "step_count": int(data[0:64], 16) if len(data) >= 64 else None, "max_capital_atomic": int(data[64:128], 16) if len(data) >= 128 else None})
-        elif topics[0] == STEP_ACTIVATED_TOPIC.lower() and len(topics) >= 3:
+        elif topics[0] == STEP_ACTIVATED_TOPIC.lower() and len(topics) >= 3 and log_address == vault:
             decoded.append({"kind": "STEP_ACTIVATED", "policy_id": int(topics[1], 16), "step_index": int(topics[2], 16), "reference_price": int(data[-64:], 16) if len(data) >= 64 else None})
-        elif topics[0] == STEP_EXECUTED_TOPIC.lower() and len(topics) >= 3:
+        elif topics[0] == STEP_EXECUTED_TOPIC.lower() and len(topics) >= 3 and log_address == vault:
             decoded.append({"kind": "STEP_EXECUTED", "policy_id": int(topics[1], 16), "step_index": int(topics[2], 16), "sold_atomic": int(data[0:64], 16) if len(data) >= 64 else None, "bought_atomic": int(data[64:128], 16) if len(data) >= 128 else None, "min_buy_atomic": int(data[128:192], 16) if len(data) >= 192 else None})
-        elif topics[0] == POLICY_COMPLETED_TOPIC.lower() and len(topics) >= 2:
+        elif topics[0] == POLICY_COMPLETED_TOPIC.lower() and len(topics) >= 2 and log_address == vault:
             decoded.append({"kind": "POLICY_COMPLETED", "policy_id": int(topics[1], 16)})
     if not decoded:
+        if not vault:
+            raise ValueError("sequence has no persisted canonical vault and receipt has no factory VaultCreated event")
         raise ValueError("successful receipt contains no expected Segue policy event")
     return {"status": "CONFIRMED", "tx_hash": tx_hash, "receipt": receipt, "events": decoded}

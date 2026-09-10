@@ -335,7 +335,7 @@ if FastAPI:
         if sequence.get("last_tx_hash") == tx_hash and sequence.get("onchain_status") in {"CONFIRMED", "FAILED"}:
             return {**sequence, "events": store.events(sequence_id), "receipt_status": sequence["onchain_status"], "decoded_events": [] , "already_reconciled": True}
         try:
-            result = reconcile_sequence_receipt(_rpc(), sequence, tx_hash)
+            result = reconcile_sequence_receipt(_rpc(), sequence, tx_hash, factory=deployment_config().get("FACTORY_ADDRESS"))
         except HTTPException:
             raise
         except Exception as exc:
@@ -350,7 +350,12 @@ if FastAPI:
                 event_policy = int(event.get("policy_id", 0) or 0)
                 if expected_policy and event_policy and event_policy != expected_policy:
                     raise HTTPException(status_code=409, detail="receipt belongs to a different persisted policy")
-                if event["kind"] == "POLICY_CREATED":
+                if event["kind"] == "VAULT_CREATED":
+                    if event["owner"].lower() != sequence["wallet"].lower():
+                        raise HTTPException(status_code=409, detail="receipt belongs to a different sequence owner")
+                    sequence["vault_address"] = event["vault"]
+                    sequence["vault_provenance"] = {"factory": deployment_config().get("FACTORY_ADDRESS"), "tx_hash": tx_hash, "executor": event["executor"]}
+                elif event["kind"] == "POLICY_CREATED":
                     sequence["policy_id"] = event["policy_id"]
                     sequence["status"] = "ACTIVE"
                 elif event["kind"] == "STEP_ACTIVATED":
