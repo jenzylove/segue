@@ -37,6 +37,26 @@ class FrontendWalletFlowTests(unittest.TestCase):
             self.assertIn(label, html)
         self.assertIn("Save sequence draft", html)
         self.assertIn("Official Coinbase Tokenized Stocks on Base", html)
+        self.assertIn('id="summary-holdings"', html)
+        self.assertIn('id="market-asset-selector"', html)
+        self.assertIn("No supported tokenized stocks found in this wallet.", html)
+        self.assertIn("Coinbase Tokenized Stocks are available only in eligible jurisdictions.", html)
+
+    def test_sequence_builder_keeps_condition_and_action_amounts_separate(self):
+        html = (ROOT / "frontend" / "app.html").read_text(encoding="utf-8")
+        for field in (
+            "sequence-asset",
+            "sequence-condition-value",
+            "sequence-destination",
+            "sequence-amount-mode",
+            "sequence-amount",
+            "sequence-deviation",
+            "sequence-expiry",
+        ):
+            self.assertIn(field, html)
+        self.assertIn("rows.children.length >= 8", html)
+        self.assertIn("PERCENT_BALANCE", html)
+        self.assertNotIn("amount_mode: condition.includes('BPS')", html)
 
     def test_catalogue_uses_official_acquisition_provenance(self):
         from backend.segue_api.b20 import BASE_STOCKS_SOURCE, B20_REGISTRY, registry_public
