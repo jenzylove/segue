@@ -50,6 +50,12 @@ class MissionStore:
         self.db.commit()
         self._ensure_action_columns()
 
+    def sequence_store(self):
+        # Imported lazily to keep the credit-only runtime dependency-free and
+        # avoid a circular import during SQLite initialization.
+        from .sequence import SequenceStore
+        return SequenceStore(self.db)
+
     def _ensure_action_columns(self) -> None:
         cols = {row[1] for row in self.db.execute("pragma table_info(mission_actions)")}
         if "updated_at" not in cols:

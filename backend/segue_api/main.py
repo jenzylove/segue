@@ -34,6 +34,8 @@ from .morpho import (
 from .morpho_plans import borrower_action_plan, full_repay_plan, lender_supply_plan, withdraw_plan
 from .morpho_risk import proposal as morpho_proposal
 from .worker import reconcile_live, reconcile_receipt
+from .b20 import portfolio_for_wallet, registry_public
+from .sequence import SequenceStore
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,13 +54,17 @@ def _load_env() -> None:
 
 _load_env()
 if FastAPI:
-    app = FastAPI(title="Segue Credit API", version="1.0.0")
+    app = FastAPI(title="Segue API", version="1.1.0")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 else:
     app = None
 
 _missions = MissionStore(os.environ.get("SEGUE_DB_PATH", str(ROOT / "segue_missions.sqlite3")))
 _position_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _sequence_store() -> SequenceStore:
+    return _missions.sequence_store()
 
 
 def _rpc() -> str:
@@ -172,6 +178,60 @@ if FastAPI:
             if cached and time.time() - cached[0] < 300:
                 payload = dict(cached[1]); payload["live_state_stale"] = True; payload["stale_reason"] = "provider temporarily unavailable; showing last verified snapshot"; return payload
             raise
+
+    @app.get("/v1/portfolio")
+    def portfolio(wallet: str) -> dict[str, Any]:
+        owner = _wallet({"wallet": wallet})
+        try:
+            return portfolio_for_wallet(_rpc(), owner)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"live portfolio read failed: {exc}") from exc
+
+    @app.get("/v1/portfolio/registry")
+    def portfolio_registry() -> dict[str, Any]:
+        return {"chain_id": 8453, "assets": registry_public(), "source": "https://brand.base.org/stocks"}
+
+    @app.get("/v1/sequences")
+    def list_sequences(wallet: str) -> dict[str, Any]:
+        owner = _wallet({"wallet": wallet})
+        return {"wallet": owner, "sequences": _sequence_store().by_wallet(owner)}
+
+    @app.post("/v1/sequences")
+    def create_sequence(body: dict[str, Any]) -> dict[str, Any]:
+        _reject_protocol_inputs(body)
+        owner = _wallet(body)
+        try:
+            steps = body.get("steps")
+            max_capital = int(body.get("max_capital_atomic", body.get("max_capital", 0)) or 0)
+            sequence = _sequence_store().create(owner, steps, max_capital_atomic=max_capital, vault_address=body.get("vault_address"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {**sequence, "events": _sequence_store().events(sequence["id"])}
+
+    @app.get("/v1/sequences/{sequence_id}")
+    def get_sequence(sequence_id: str) -> dict[str, Any]:
+        store = _sequence_store()
+        sequence = store.get(sequence_id)
+        if not sequence:
+            raise HTTPException(status_code=404, detail="sequence not found")
+        return {**sequence, "events": store.events(sequence_id)}
+
+    @app.get("/v1/activity")
+    def activity(wallet: str) -> dict[str, Any]:
+        owner = _wallet({"wallet": wallet})
+        missions = _missions.by_owner(owner)
+        mission_events: list[dict[str, Any]] = []
+        for item in missions:
+            mission_events.extend([{**event, "source": "credit", "mission_id": item.id} for event in _missions.timeline(item.id)])
+        sequence_store = _sequence_store()
+        sequences = sequence_store.by_wallet(owner)
+        sequence_events: list[dict[str, Any]] = []
+        for item in sequences:
+            sequence_events.extend([{**event, "source": "sequence", "sequence_id": item["id"]} for event in sequence_store.events(item["id"])])
+        events = sorted(mission_events + sequence_events, key=lambda item: item.get("created_at", ""), reverse=True)
+        return {"wallet": owner, "events": events[:100]}
 
     @app.post("/v1/credit/proposal")
     def credit_proposal(body: dict[str, Any]) -> dict[str, Any]:

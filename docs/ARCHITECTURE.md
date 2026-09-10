@@ -61,9 +61,12 @@ FastAPI automation worker
         └─ SQLite mission/evidence index (durable volume)
 ```
 
-The unified FastAPI service serves both the frozen landing surface (`/`) and a
-recoverable position workspace (`/app.html`). The workspace is a thin API
-client: it never owns authority, fabricates state, or accepts raw calldata.
+The unified FastAPI service serves both the frozen landing surface (`/`) and the
+connected-wallet Segue workspace (`/app.html`). The workspace exposes four
+product areas: Portfolio (registry-driven B20 balances), Sequences (durable
+M1/M2-compatible policy drafts), Credit (the live Morpho mission), and Activity
+(merged evidence timeline). It is a thin API client: it never owns authority,
+fabricates state, or accepts raw calldata.
 
 ## Credit backend
 
@@ -184,6 +187,17 @@ installation can point `SEGUE_DB_PATH` at durable storage; PostgreSQL remains a
 future scale-out option rather than an unimplemented claim.
 
 The app must recover after local/browser state is cleared.
+
+### Connected-wallet product surface
+
+`GET /v1/portfolio?wallet=...` reads each verified Base B20 token balance and
+returns capability flags. The catalogue is deliberately conservative and sourced
+from Base's official stocks page; capability differences are explicit rather than
+implied. `GET/POST /v1/sequences` and `GET /v1/sequences/{id}` persist validated
+linear steps (maximum eight) with the same condition, amount, cap and deviation
+semantics enforced by `StockPolicyVault`. `GET /v1/activity` merges durable
+credit mission and sequence events. A connected wallet with no records receives
+an empty state; the reference wallet is reachable only through `?demo=1`.
 
 ## Verification status
 

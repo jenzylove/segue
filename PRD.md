@@ -4,8 +4,8 @@
 **Tagline:** Program what your portfolio does next.  
 **Hackathon:** Base Builder Quest — Tokenized Stocks  
 **Target network:** Base mainnet  
-**Current repository baseline for this revision:** `589fd0c61075f712b876c3f7e847c248de52b357`
-**Current build state:** M1 contract state machine complete; the original M2 vault buy/sell path remains protected by its provider/funding gates; the Morpho Blue B20 credit mission is implemented and has a real Base-mainnet read/borrow proof; the current API, worker and landing surface use live Morpho state.
+**Current repository baseline for this revision:** updated at each pushed milestone
+**Current build state:** M1 contract state machine complete; the original M2 vault buy/sell path remains protected by its provider/funding gates; the Morpho Blue B20 credit mission has a real Base-mainnet read/borrow proof; the connected-wallet API/workspace now exposes registry-driven Portfolio, durable Sequences, live Credit and Activity evidence.
 **Source of truth:** This PRD is the product/build contract. `BUILD_RULES.md`, `AGENTS.md`, `docs/INTEGRATIONS.md`, `docs/ARCHITECTURE.md`, and milestone-specific docs are subordinate execution documents.
 
 ---
@@ -72,7 +72,7 @@ Never collapse these into “done.”
 
 # 1. Product thesis
 
-**Segue is a self-managing credit and sequenced policy layer for Coinbase Tokenized Stocks on Base.**
+**Segue is a self-managing portfolio, credit and sequenced policy layer for Coinbase Tokenized Stocks on Base.**
 
 A user can hold or acquire supported B20 stocks, borrow USDC against them through real Base credit markets, and precommit what should happen next when risk or opportunity conditions change.
 
@@ -107,6 +107,17 @@ Coinbase Tokenized Stocks as composable DeFi assets, including lending/borrowing
 and credit/yield use cases. The pivot does not permit fake integrations, guessed
 addresses, unsafe wallet authority, or a claim that Morpho credit is verified
 until real Base/Morpho evidence is captured.
+
+## 1.0.1 Connected-wallet workspace
+
+`/app.html` is the product home after an explicit EIP-1193 wallet connection.
+Portfolio reads the official Base Coinbase Tokenized Stocks catalogue and live
+ERC-20 balances, with sequence and credit capability marked per asset. The
+current curated registry is NVDAc, METAc, AAPLc, GOOGLc and AMZNc from
+`https://brand.base.org/stocks`; only NVDAc is currently marked as having a
+verified Segue Chainlink/Morpho credit rail. Sequences persist bounded drafts
+using the M1/M2 maximum-eight-step semantics. The reference NVDAc position is
+available only through the explicit live-demo route.
 
 ## 1.1 Problem
 

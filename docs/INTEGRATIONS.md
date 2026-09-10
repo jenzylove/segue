@@ -39,7 +39,7 @@ This ledger stays live for the entire build. Do not let planned integrations sil
 | Integration | Purpose | Required | Credential | Status | Completion evidence |
 |---|---|---:|---|---|---|
 | Base mainnet | execution network | YES | Base ETH | real provider tested | M2 preflight reached chainId 8453 and read configured contracts/feeds; deployment + real tx still pending |
-| Coinbase B20 assets | tokenized stocks | YES | none | real provider tested | M2 preflight read official NVDAc on Base and confirmed ERC-20 decimals=8; deployed-registry evidence still pending |
+| Coinbase B20 assets | tokenized stocks | YES | none | real provider tested | Portfolio registry reads the official Base stocks catalogue (NVDAc, METAc, AAPLc, GOOGLc, AMZNc); live Base bytecode/decimals/balance reads are performed per asset. Only NVDAc is marked credit-capable until its Morpho/Chainlink rail is verified. |
 | Chainlink total-return feeds | trigger + valuation truth | YES | none | real provider tested | M2 preflight read USDC/USD and NVDA total-return feeds on Base; freshness is now enforced before live M2 execution |
 | 1inch Classic Swap API | B20 quote/routing | YES | `ONEINCH_API_KEY` | locally tested | Official v6.1 request semantics rechecked 2026-09-07; response/preflight validators and runbook integration pass locally; dedicated key + live route still required |
 | 0x Swap API | superseded M2 route | NO | `ZEROX_API_KEY` | blocked | Live USDC→NVDAc request returned HTTP 422 `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE` / legal restrictions on 2026-09-05; do not bypass provider compliance |

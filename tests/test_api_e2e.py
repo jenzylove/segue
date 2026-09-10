@@ -132,6 +132,55 @@ class ApiJourneyTests(unittest.TestCase):
             reconciled = self.client.post(f"/v1/missions/{mission_id}/reconcile", json={"tx_hash": "0x" + "a" * 64})
         self.assertEqual(reconciled.status_code, 200, reconciled.text)
 
+    def test_portfolio_is_registry_driven_and_capability_explicit(self) -> None:
+        fixture = {
+            "wallet": WALLET,
+            "chain_id": 8453,
+            "assets": [
+                {"ticker": "NVDAc", "company": "NVIDIA", "address": CANONICAL_COLLATERAL, "balance_atomic": 2323053, "balance": "0.02323053", "status": "LIVE", "sequence_supported": True, "credit_supported": True},
+                {"ticker": "AAPLc", "company": "Apple", "address": "0x" + "a" * 40, "balance_atomic": 0, "balance": "0", "status": "LIVE", "sequence_supported": False, "credit_supported": False},
+            ],
+            "registry_source": "https://brand.base.org/stocks",
+        }
+        with patch.object(api, "_rpc", return_value="rpc"), patch.object(api, "portfolio_for_wallet", return_value=fixture):
+            response = self.client.get("/v1/portfolio", params={"wallet": WALLET})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([item["ticker"] for item in response.json()["assets"]], ["NVDAc", "AAPLc"])
+        self.assertTrue(response.json()["assets"][0]["credit_supported"])
+        self.assertFalse(response.json()["assets"][1]["credit_supported"])
+
+    def test_sequence_create_recover_and_validate_contract_semantics(self) -> None:
+        body = {
+            "wallet": WALLET,
+            "max_capital_atomic": 20_000_000,
+            "steps": [{
+                "condition_type": "DOWN_BPS_FROM_REFERENCE",
+                "delta_bps": 500,
+                "action": "BUY",
+                "sell_token": USDC_BASE,
+                "buy_token": CANONICAL_COLLATERAL,
+                "amount_mode": "PERCENT_BALANCE",
+                "amount": 5000,
+                "max_deviation_bps": 100,
+            }],
+        }
+        created = self.client.post("/v1/sequences", json=body)
+        self.assertEqual(created.status_code, 200, created.text)
+        sequence = created.json()
+        self.assertEqual(sequence["status"], "DRAFT")
+        self.assertEqual(sequence["steps"][0]["status"], "ACTIVE")
+        self.assertEqual(self.client.get("/v1/sequences", params={"wallet": WALLET}).json()["sequences"][0]["id"], sequence["id"])
+        self.assertEqual(self.client.get(f"/v1/sequences/{sequence['id']}").json()["events"][0]["kind"], "SEQUENCE_CREATED")
+        invalid = self.client.post("/v1/sequences", json={**body, "steps": body["steps"] * 9})
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_activity_aggregates_credit_and_sequence_events(self) -> None:
+        created = self.client.post("/v1/sequences", json={"wallet": WALLET, "max_capital_atomic": 1, "steps": [{"condition_type": "PRICE_ABOVE", "threshold": 1, "action": "BUY", "sell_token": USDC_BASE, "buy_token": CANONICAL_COLLATERAL, "amount": 1}]})
+        self.assertEqual(created.status_code, 200, created.text)
+        activity = self.client.get("/v1/activity", params={"wallet": WALLET})
+        self.assertEqual(activity.status_code, 200, activity.text)
+        self.assertEqual(activity.json()["events"][0]["source"], "sequence")
+
 
 if __name__ == "__main__":
     unittest.main()

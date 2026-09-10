@@ -27,6 +27,13 @@ class FrontendWalletFlowTests(unittest.TestCase):
         self.assertIn('href="favicon.svg"', html)
         self.assertNotIn("params.get('wallet')", html)
 
+    def test_workspace_exposes_product_areas_and_real_api_wiring(self):
+        html = (ROOT / "frontend" / "app.html").read_text(encoding="utf-8")
+        for label in ("Portfolio", "Sequences", "Credit", "Activity", "/v1/portfolio", "/v1/sequences", "/v1/activity"):
+            self.assertIn(label, html)
+        self.assertIn("Save sequence draft", html)
+        self.assertIn("Official Coinbase Tokenized Stocks on Base", html)
+
 
 if __name__ == "__main__":
     unittest.main()

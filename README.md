@@ -43,7 +43,16 @@ Segue is an autopilot for tokenized-stock positions: unlock liquidity without se
 
 The credit mission uses Morpho Blue on Base; the original dependent stock-sequence system remains the policy and treasury execution layer.
 
-The unified FastAPI service serves the landing page at `/` and the recoverable
-live position workspace at `/app.html`. The workspace reads borrower, market,
-oracle, risk, mission and evidence state from the API and prepares unsigned
-close actions; it never signs or broadcasts transactions.
+The unified FastAPI service serves the landing page at `/` and the connected-wallet
+workspace at `/app.html`. The workspace is organized as Portfolio, Sequences,
+Credit and Activity. Portfolio balances come from the official Base B20 catalogue
+and live ERC-20 reads; only assets with verified rails expose those actions. The
+Credit tab remains the recoverable Morpho position workspace and the Sequences tab
+stores bounded drafts that mirror the M1/M2 contract semantics. The browser reads
+the API and prepares unsigned actions; it never signs or broadcasts transactions.
+
+The current curated catalogue is sourced from Base's official stocks listing
+(`https://brand.base.org/stocks`) and includes NVDAc, METAc, AAPLc, GOOGLc and
+AMZNc. NVDAc is the only asset currently marked with a verified Segue Chainlink
+feed and Morpho Blue credit market; the other entries are portfolio-visible and
+explicitly credit/sequence pending until their rails are independently verified.

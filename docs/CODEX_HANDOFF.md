@@ -18,9 +18,10 @@ The current FastAPI surface reads Base/Morpho state directly, prepares Morpho
 unsigned calls, persists missions/actions/snapshots/evidence in SQLite, and
 reconciles receipts only after provider postconditions. Full close uses fresh
 borrow shares, then gates collateral withdrawal until shares are zero. The
-landing surface and `/app.html` position workspace consume this API; the
-original B20 sequence vault remains a separate product path and is still
-subject to its own 1inch/deployment/funding evidence gates.
+landing surface and `/app.html` connected-wallet workspace consume this API;
+the workspace now exposes Portfolio, Sequences, Credit and Activity. Portfolio
+capabilities are registry-driven and explicit, while the original B20 sequence
+vault remains subject to its own 1inch/deployment/funding evidence gates.
 
 ---
 
